@@ -1,0 +1,19 @@
+# Virtual environments
+venv/
+env/
+ignore/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Environment variables (if you add a .env file later for your API key)
+.env
+
+# Leftover Node.js modules (just in case they are still around)
+node_modules/
+
+# Local testing and temp files
+test_local.py
+*.bak
+.vercel/
