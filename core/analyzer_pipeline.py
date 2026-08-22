@@ -1,21 +1,31 @@
 from core.llm_provider import LLMProvider, ModularReport
+from core.database import Database
 
 class AnalyzerPipeline:
-    def __init__(self, llm_provider: LLMProvider):
+    def __init__(self, llm_provider: LLMProvider, db: Database = None):
         self.llm = llm_provider
+        self.db = db
 
-    def process(self, text: str) -> ModularReport:
+    def process(self, user_id: str, text: str) -> ModularReport:
         clean_text = text.strip()
         
-        # Step 1: LLM Analysis (Detect language, extract specifics)
-        report = self.llm.analyze(clean_text)
+        # Prepare context if Database is available
+        context_block = ""
+        if self.db:
+            context_block = self.db.get_conversation_history(user_id)
+            
+        full_prompt = context_block + clean_text
         
-        # Step 2: Database Check (Placeholder for Lego Block)
-        # TODO: Lookup phone numbers or company names in Supabase
-        # if found: report.database_findings = "This number was reported 3 times."
+        # Step 1: LLM Analysis 
+        report = self.llm.analyze(full_prompt)
         
-        # Step 3: Web Search (Placeholder for Lego Block)
-        # TODO: Run Google Custom Search on company name
-        # if found: report.web_search_findings = "Company website registered 2 days ago."
+        # Step 2: Database Check (Placeholder)
         
+        # Step 3: Web Search (Placeholder)
+        
+        # Save to history if DB available
+        if self.db:
+            self.db.save_message(user_id, "user", clean_text)
+            self.db.save_message(user_id, "assistant", report.specific_analysis)
+            
         return report

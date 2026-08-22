@@ -18,9 +18,7 @@ class LLMProvider:
         raise NotImplementedError("Subclasses must implement this method")
 
 class GeminiLLMProvider(LLMProvider):
-    def __init__(self):
-        api_key = os.getenv("GEMINI_API_KEY")
-        # The new Google GenAI client
+    def __init__(self, api_key: str):
         self.client = genai.Client(api_key=api_key)
         self.model = "gemini-3.6-flash" 
 
@@ -48,50 +46,79 @@ class GeminiLLMProvider(LLMProvider):
         """
 
     def analyze(self, text: str) -> ModularReport:
-        try:
-            response = self.client.models.generate_content(
-                model='gemini-3.6-flash',
-                contents=text,
-                config=types.GenerateContentConfig(
-                    system_instruction=self.system_instruction,
-                    temperature=0.2,
-                    response_mime_type="application/json"
-                )
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=text,
+            config=types.GenerateContentConfig(
+                system_instruction=self.system_instruction,
+                temperature=0.2,
+                response_mime_type="application/json"
             )
+        )
+        
+        raw_content = response.text.strip()
+        if raw_content.startswith("```json"):
+            raw_content = raw_content[7:-3].strip()
+        elif raw_content.startswith("```"):
+            raw_content = raw_content[3:-3].strip()
             
-            raw_content = response.text.strip()
-            
-            # Defensive check: if Gemini accidentally wraps it in markdown, strip it.
-            if raw_content.startswith("```json"):
-                raw_content = raw_content[7:-3].strip()
-            elif raw_content.startswith("```"):
-                raw_content = raw_content[3:-3].strip()
+        data = json.loads(raw_content)
+        
+        return ModularReport(
+            risk_level=data.get("risk_level", "Medium"),
+            detected_language=data.get("detected_language", "English"),
+            specific_analysis=data.get("specific_analysis", "Could not fully parse reasoning."),
+            recommended_action=data.get("recommended_action", "Be careful and verify the source."),
+            database_findings=None,
+            web_search_findings=None
+        )
+
+
+class OrchestratorLLMProvider(LLMProvider):
+    """
+    Manages multiple LLM providers and API keys to route around rate limits (429).
+    """
+    def __init__(self):
+        self.providers = []
+        
+        # Load all available Gemini Keys (GEMINI_API_KEY, GEMINI_API_KEY_2, etc.)
+        for key_name in ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3"]:
+            api_key = os.getenv(key_name)
+            if api_key:
+                self.providers.append(GeminiLLMProvider(api_key=api_key))
                 
-            data = json.loads(raw_content)
-            
-            return ModularReport(
-                risk_level=data.get("risk_level", "Medium"),
-                detected_language=data.get("detected_language", "English"),
-                specific_analysis=data.get("specific_analysis", "Could not fully parse reasoning."),
-                recommended_action=data.get("recommended_action", "Be careful and verify the source."),
-                database_findings=None,
-                web_search_findings=None
-            )
-        except Exception as e:
-            error_message = str(e)
-            
-            # Check for Rate Limiting / Quota exceeded (usually HTTP 429)
-            if "429" in error_message or "quota" in error_message.lower() or "rate" in error_message.lower():
-                print("🚨 [CRITICAL LOG] GEMINI API RATE LIMIT OR QUOTA REACHED! 🚨")
-                print(f"Details: {error_message}")
-            else:
-                print(f"Gemini API Error: {error_message}")
+        self.current_idx = 0
+
+    def analyze(self, text: str) -> ModularReport:
+        if not self.providers:
+            return self._fallback_error("No API keys configured.")
+
+        attempts = 0
+        while attempts < len(self.providers):
+            provider = self.providers[self.current_idx]
+            try:
+                return provider.analyze(text)
+            except Exception as e:
+                error_message = str(e).lower()
                 
-            return ModularReport(
-                risk_level="Medium",
-                detected_language="English",
-                specific_analysis="System is currently overloaded or unavailable. Please verify manually.",
-                recommended_action="Do not share personal information until verified.",
-                database_findings=None,
-                web_search_findings=None
-            )
+                # If it's a rate limit, rotate key and try next
+                if "429" in error_message or "quota" in error_message or "rate limit" in error_message:
+                    print(f"🚨 [ORCHESTRATOR] Key {self.current_idx} Hit Rate Limit! Rotating...")
+                    self.current_idx = (self.current_idx + 1) % len(self.providers)
+                    attempts += 1
+                else:
+                    # For non-rate-limit errors (like JSON parsing), just fail to avoid burning all keys
+                    print(f"🚨 [ORCHESTRATOR] Unexpected Error on Key {self.current_idx}: {e}")
+                    return self._fallback_error("System encountered an unexpected error. Please try again later.")
+                    
+        return self._fallback_error("System is currently overloaded. Please verify manually.")
+
+    def _fallback_error(self, message: str) -> ModularReport:
+        return ModularReport(
+            risk_level="Medium",
+            detected_language="English",
+            specific_analysis=message,
+            recommended_action="Do not share personal information until verified.",
+            database_findings=None,
+            web_search_findings=None
+        )
