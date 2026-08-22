@@ -20,7 +20,7 @@ class LLMProvider:
 class GeminiLLMProvider(LLMProvider):
     def __init__(self, api_key: str):
         self.client = genai.Client(api_key=api_key)
-        self.model = "gemini-3.6-flash" 
+        self.model = "gemini-3.5-flash-lite" 
 
         self.system_instruction = """
         You are an expert scam and phishing detector specializing in Pakistani job scams.
@@ -101,9 +101,9 @@ class OrchestratorLLMProvider(LLMProvider):
             except Exception as e:
                 error_message = str(e).lower()
                 
-                # If it's a rate limit, rotate key and try next
-                if "429" in error_message or "quota" in error_message or "rate limit" in error_message:
-                    print(f"🚨 [ORCHESTRATOR] Key {self.current_idx} Hit Rate Limit! Rotating...")
+                # If it's a rate limit or 503 server overload, rotate key and try next
+                if any(err in error_message for err in ["429", "quota", "rate limit", "503", "unavailable"]):
+                    print(f"🚨 [ORCHESTRATOR] Key {self.current_idx} Hit Rate Limit/503! Rotating...")
                     self.current_idx = (self.current_idx + 1) % len(self.providers)
                     attempts += 1
                 else:
