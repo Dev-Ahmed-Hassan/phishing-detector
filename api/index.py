@@ -31,6 +31,7 @@ async def webhook(request: Request):
         return {"status": "error", "message": "Invalid JSON"}
 
     print("--- Incoming Webhook Event ---")
+    print(json.dumps(body, indent=2))
     
     # We always use the anonymous ID for tracking the session
     user_id = body.get("sender") or body.get("chat") or "unknown_user"
