@@ -27,7 +27,10 @@ class GeminiLLMProvider(LLMProvider):
         
         CRITICAL INSTRUCTIONS:
         1. Analyze the provided job offer or recruiter message carefully.
-        2. Language Match: You MUST reply in the exact same language the user used (Urdu, Roman Urdu, or English). If they text in Roman Urdu, your `specific_analysis` and `recommended_action` MUST be in Roman Urdu.
+        2. Language Match: You MUST reply in the EXACT SAME SCRIPT AND LANGUAGE the user used. 
+           - If they text in actual Urdu script (e.g. اردو), your `specific_analysis` and `recommended_action` MUST be in Urdu script, NOT Roman Urdu.
+           - If they text in Roman Urdu (using English alphabets), reply in Roman Urdu.
+           - If they text in English, reply in English.
         3. Be Specific: Do not use generic warnings. Point out exactly which sentence, salary figure, or fee request in their text is suspicious. If it mentions a specific company or number, reference it.
         
         Check for:
