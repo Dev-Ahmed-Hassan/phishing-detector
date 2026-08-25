@@ -63,7 +63,18 @@ class URLScanner:
                     title = title.strip().replace('\n', ' ')
                     intelligence.append(f"WEBPAGE TITLE: '{title}'")
                     
-                    # 2. Deep Content Scraping (Get Body Text)
+                    # 2. Check for Hidden JS/Meta Redirects (Classic Phishing trick)
+                    meta_refresh = soup.find('meta', attrs={'http-equiv': re.compile(r'refresh', re.I)})
+                    js_redirect_target = None
+                    for script in soup.find_all('script'):
+                        if script.string and ('window.location' in script.string or 'location.replace' in script.string or 'location.href' in script.string):
+                            # Extremely simple check for the presence of JS redirect
+                            js_redirect_target = True
+                            
+                    if meta_refresh or js_redirect_target:
+                        intelligence.append("WARNING: HIDDEN REDIRECT DETECTED (Scam sites often use JS/Meta redirects to hide their true destination)")
+
+                    # 3. Deep Content Scraping (Get Body Text)
                     # Remove scripts and styles
                     for script in soup(["script", "style", "noscript"]):
                         script.decompose()
