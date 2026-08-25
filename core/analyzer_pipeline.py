@@ -35,11 +35,24 @@ class AnalyzerPipeline:
         Stateless, DB-free pipeline for the Web App.
         Uses the deterministic Web LLM provider and returns an expanded WebModularReport.
         """
+        from core.url_scanner import URLScanner
+        
         clean_text = text.strip() if text else ""
+        
+        # --- AGENTIC URL SANDBOXING ---
+        system_report = URLScanner.generate_system_report(clean_text)
+        
+        if system_report:
+            print(f"🕵️  [PIPELINE] URL Scanner triggered. Injecting intelligence...")
+            clean_text += f"\n\n{system_report}"
         
         # Step 1: LLM Analysis directly with no DB context
         report = self.llm.analyze_web(clean_text, media_bytes, mime_type)
         
-        # We can add web-specific steps here later (e.g. searching the web for `report.detected_urls`)
+        # Ensure detected URLs from the scanner are included in the final report
+        # if the LLM missed them or couldn't extract them.
+        scraped_urls = URLScanner.extract_urls(text)
+        if scraped_urls:
+            report.detected_urls = list(set(report.detected_urls + scraped_urls))
         
         return report

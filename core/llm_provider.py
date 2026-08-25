@@ -68,11 +68,16 @@ class GeminiLLMProvider(LLMProvider):
         2. Language Match: You MUST reply in the EXACT SAME SCRIPT AND LANGUAGE the user used.
         3. Be Specific: Do not use generic warnings. Point out exactly which sentence, salary figure, or fee request is suspicious.
         
+        [SYSTEM AUTOMATED URL SCAN] HANDLING:
+        If you see a section labeled [SYSTEM AUTOMATED URL SCAN] at the bottom of the prompt, it means our backend actively scraped the URLs in the message. 
+        - If a domain is newly registered (e.g. less than 1 year old), increase the risk level and confidence score.
+        - If the webpage title contradicts the message (e.g. they claim to be Amazon but the title is "Earn Free Crypto"), explicitly mention this in your `specific_analysis`.
+        
         Check for:
         - Upfront fees / Registration fees / Processing fees
         - Unrealistic salaries for the described role
         - High-pressure urgency (e.g., "Reply within 10 minutes")
-        - Suspicious links or unverifiable company details
+        - Suspicious links or unverifiable company details (cross-reference with the AUTOMATED URL SCAN if present)
         
         Respond ONLY with a JSON object in this exact format, nothing else:
         {
