@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, File, UploadFile, Form
 import httpx
 import json
 import os
@@ -22,6 +22,36 @@ pipeline = AnalyzerPipeline(llm_provider, db=db)
 @app.get("/")
 def read_root():
     return {"message": "FastAPI WhatsApp Webhook Server is running (Modular V2)!"}
+
+@app.post("/api/analyze-web")
+async def analyze_web(
+    text: str = Form(default=""),
+    file: UploadFile = File(default=None),
+    user_id: str = Form(default="web_user_anonymous")
+):
+    media_bytes = None
+    mime_type = None
+    
+    if file:
+        media_bytes = await file.read()
+        mime_type = file.content_type
+        
+    assessment = pipeline.process(
+        user_id=user_id, 
+        text=text, 
+        media_bytes=media_bytes, 
+        mime_type=mime_type
+    )
+    
+    return {
+        "status": "success",
+        "report": {
+            "risk_level": assessment.risk_level,
+            "detected_language": assessment.detected_language,
+            "specific_analysis": assessment.specific_analysis,
+            "recommended_action": assessment.recommended_action
+        }
+    }
 
 @app.post("/webhook")
 async def webhook(request: Request):

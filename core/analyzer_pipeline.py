@@ -6,8 +6,8 @@ class AnalyzerPipeline:
         self.llm = llm_provider
         self.db = db
 
-    def process(self, user_id: str, text: str) -> ModularReport:
-        clean_text = text.strip()
+    def process(self, user_id: str, text: str, media_bytes: bytes = None, mime_type: str = None) -> ModularReport:
+        clean_text = text.strip() if text else ""
         
         # Prepare context if Database is available
         context_block = ""
@@ -17,7 +17,7 @@ class AnalyzerPipeline:
         full_prompt = context_block + clean_text
         
         # Step 1: LLM Analysis 
-        report = self.llm.analyze(full_prompt)
+        report = self.llm.analyze(full_prompt, media_bytes, mime_type)
         
         # Step 2: Database Check (Placeholder)
         

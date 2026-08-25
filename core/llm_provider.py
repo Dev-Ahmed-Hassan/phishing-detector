@@ -14,7 +14,7 @@ class ModularReport(BaseModel):
     recommended_action: str         # Actionable advice in the user's language
 
 class LLMProvider:
-    def analyze(self, text: str) -> ModularReport:
+    def analyze(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> ModularReport:
         raise NotImplementedError("Subclasses must implement this method")
 
 class GeminiLLMProvider(LLMProvider):
@@ -48,10 +48,17 @@ class GeminiLLMProvider(LLMProvider):
         }
         """
 
-    def analyze(self, text: str) -> ModularReport:
+    def analyze(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> ModularReport:
+        # Build contents array. Always include text.
+        contents = [text]
+        if media_bytes and mime_type:
+            contents.append(
+                types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
+            )
+
         response = self.client.models.generate_content(
             model=self.model,
-            contents=text,
+            contents=contents,
             config=types.GenerateContentConfig(
                 system_instruction=self.system_instruction,
                 temperature=0.2,
@@ -92,7 +99,7 @@ class OrchestratorLLMProvider(LLMProvider):
                 
         self.current_idx = 0
 
-    def analyze(self, text: str) -> ModularReport:
+    def analyze(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> ModularReport:
         if not self.providers:
             return self._fallback_error("No API keys configured.")
 
@@ -100,7 +107,7 @@ class OrchestratorLLMProvider(LLMProvider):
         while attempts < len(self.providers):
             provider = self.providers[self.current_idx]
             try:
-                return provider.analyze(text)
+                return provider.analyze(text, media_bytes, mime_type)
             except Exception as e:
                 error_message = str(e).lower()
                 
