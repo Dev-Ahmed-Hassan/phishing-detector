@@ -57,9 +57,30 @@ class URLScanner:
                 
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, 'html.parser')
+                    
+                    # 1. Get Title
                     title = soup.title.string if soup.title else "No Title"
                     title = title.strip().replace('\n', ' ')
                     intelligence.append(f"WEBPAGE TITLE: '{title}'")
+                    
+                    # 2. Deep Content Scraping (Get Body Text)
+                    # Remove scripts and styles
+                    for script in soup(["script", "style", "noscript"]):
+                        script.decompose()
+                    
+                    body_text = soup.get_text(separator=' ', strip=True)
+                    # Limit to ~500 words to avoid massive prompts
+                    words = body_text.split()
+                    if len(words) > 500:
+                        body_text = ' '.join(words[:500]) + "... [TRUNCATED]"
+                    else:
+                        body_text = ' '.join(words)
+                        
+                    if body_text:
+                        intelligence.append(f"WEBPAGE CONTENT SNIPPET: {body_text}")
+                    else:
+                        intelligence.append(f"WEBPAGE CONTENT SNIPPET: (No readable text found)")
+                        
                 else:
                     intelligence.append(f"WEBPAGE STATUS: Returns HTTP {response.status_code}")
         except httpx.RequestError:
@@ -68,6 +89,11 @@ class URLScanner:
             intelligence.append(f"WEBPAGE STATUS: Error accessing page ({str(e)})")
 
         return " | ".join(intelligence)
+
+    TRUSTED_DOMAINS = [
+        'google.com', 'youtube.com', 'facebook.com', 'twitter.com', 'x.com', 
+        'instagram.com', 'linkedin.com', 'tiktok.com', 'amazon.com', 'apple.com'
+    ]
 
     @classmethod
     def generate_system_report(cls, text: str) -> str:
@@ -79,8 +105,19 @@ class URLScanner:
         if not urls:
             return ""
             
+        # Filter out extremely common trusted domains so scammers can't use them as "padding"
+        suspicious_urls = []
+        for url in urls:
+            domain = url.replace('https://', '').replace('http://', '').split('/')[0].lower()
+            # If the domain doesn't end with a trusted domain (e.g. ignoring www.google.com)
+            if not any(domain.endswith(trusted) for trusted in cls.TRUSTED_DOMAINS):
+                suspicious_urls.append(url)
+            
+        if not suspicious_urls:
+            return ""
+            
         reports = []
-        for url in urls[:3]: # Limit to 3 to prevent abuse/timeouts
+        for url in suspicious_urls[:3]: # Limit to 3 to prevent abuse/timeouts
             reports.append(cls.scan_url(url))
             
         final_report = "\n[SYSTEM AUTOMATED URL SCAN]\n"

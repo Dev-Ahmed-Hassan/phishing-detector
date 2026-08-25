@@ -72,6 +72,7 @@ class GeminiLLMProvider(LLMProvider):
         If you see a section labeled [SYSTEM AUTOMATED URL SCAN] at the bottom of the prompt, it means our backend actively scraped the URLs in the message. 
         - If a domain is newly registered (e.g. less than 1 year old), increase the risk level and confidence score.
         - If the webpage title contradicts the message (e.g. they claim to be Amazon but the title is "Earn Free Crypto"), explicitly mention this in your `specific_analysis`.
+        - If a WEBPAGE CONTENT SNIPPET is provided, read the actual text of the website! Even if the link is hosted on a trusted domain (like vercel.app or google.com), if the website's content looks like a scam (e.g. asking for fees, fake data entry jobs), you MUST flag the content as High Risk!
         
         Check for:
         - Upfront fees / Registration fees / Processing fees
