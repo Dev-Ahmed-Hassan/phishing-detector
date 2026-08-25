@@ -36,8 +36,7 @@ async def analyze_web(
         media_bytes = await file.read()
         mime_type = file.content_type
         
-    assessment = pipeline.process(
-        user_id=user_id, 
+    assessment = pipeline.process_web(
         text=text, 
         media_bytes=media_bytes, 
         mime_type=mime_type
@@ -47,9 +46,12 @@ async def analyze_web(
         "status": "success",
         "report": {
             "risk_level": assessment.risk_level,
+            "confidence_score": assessment.confidence_score,
             "detected_language": assessment.detected_language,
             "specific_analysis": assessment.specific_analysis,
-            "recommended_action": assessment.recommended_action
+            "recommended_action": assessment.recommended_action,
+            "threat_vectors": assessment.threat_vectors,
+            "detected_urls": assessment.detected_urls
         }
     }
 

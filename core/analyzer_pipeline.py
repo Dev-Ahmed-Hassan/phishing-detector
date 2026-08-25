@@ -29,3 +29,17 @@ class AnalyzerPipeline:
             self.db.save_message(user_id, "assistant", report.specific_analysis)
             
         return report
+
+    def process_web(self, text: str, media_bytes: bytes = None, mime_type: str = None):
+        """
+        Stateless, DB-free pipeline for the Web App.
+        Uses the deterministic Web LLM provider and returns an expanded WebModularReport.
+        """
+        clean_text = text.strip() if text else ""
+        
+        # Step 1: LLM Analysis directly with no DB context
+        report = self.llm.analyze_web(clean_text, media_bytes, mime_type)
+        
+        # We can add web-specific steps here later (e.g. searching the web for `report.detected_urls`)
+        
+        return report

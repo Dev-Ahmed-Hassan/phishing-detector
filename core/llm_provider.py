@@ -13,8 +13,20 @@ class ModularReport(BaseModel):
     web_search_findings: Optional[str] = None 
     recommended_action: str         # Actionable advice in the user's language
 
+class WebModularReport(BaseModel):
+    risk_level: str
+    confidence_score: int           # 0-100
+    detected_language: str
+    specific_analysis: str
+    recommended_action: str
+    threat_vectors: list[str]       # e.g., ["Urgency", "Upfront Fee Request"]
+    detected_urls: list[str]        # list of URLs found in text/image
+
 class LLMProvider:
     def analyze(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> ModularReport:
+        raise NotImplementedError("Subclasses must implement this method")
+        
+    def analyze_web(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> WebModularReport:
         raise NotImplementedError("Subclasses must implement this method")
 
 class GeminiLLMProvider(LLMProvider):
@@ -45,6 +57,32 @@ class GeminiLLMProvider(LLMProvider):
             "detected_language": "Roman Urdu",
             "specific_analysis": "Specifically explain what is fishy in their message using their language.",
             "recommended_action": "Tell them exactly what to do next in their language (e.g., block the number, don't pay)."
+        }
+        """
+
+        self.system_instruction_web = """
+        You are an expert scam and phishing detector specializing in Pakistani job scams.
+        
+        CRITICAL INSTRUCTIONS:
+        1. Analyze the provided job offer, recruiter message, or uploaded image/audio.
+        2. Language Match: You MUST reply in the EXACT SAME SCRIPT AND LANGUAGE the user used.
+        3. Be Specific: Do not use generic warnings. Point out exactly which sentence, salary figure, or fee request is suspicious.
+        
+        Check for:
+        - Upfront fees / Registration fees / Processing fees
+        - Unrealistic salaries for the described role
+        - High-pressure urgency (e.g., "Reply within 10 minutes")
+        - Suspicious links or unverifiable company details
+        
+        Respond ONLY with a JSON object in this exact format, nothing else:
+        {
+            "risk_level": "High" | "Medium" | "Low",
+            "confidence_score": 85, // Integer from 0 to 100
+            "detected_language": "English",
+            "specific_analysis": "Detailed explanation of what is fishy...",
+            "recommended_action": "Actionable next steps...",
+            "threat_vectors": ["Urgency", "Unrealistic Salary", "Upfront Fee"], // Array of short string tags
+            "detected_urls": ["http://suspicious-link.com"] // Array of any URLs found in the text or image
         }
         """
 
@@ -81,6 +119,41 @@ class GeminiLLMProvider(LLMProvider):
             recommended_action=data.get("recommended_action", "Be careful and verify the source."),
             database_findings=None,
             web_search_findings=None
+        )
+
+    def analyze_web(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> WebModularReport:
+        contents = [text]
+        if media_bytes and mime_type:
+            contents.append(
+                types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
+            )
+
+        response = self.client.models.generate_content(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=self.system_instruction_web,
+                temperature=0.0, # Deterministic setting
+                response_mime_type="application/json"
+            )
+        )
+        
+        raw_content = response.text.strip()
+        if raw_content.startswith("```json"):
+            raw_content = raw_content[7:-3].strip()
+        elif raw_content.startswith("```"):
+            raw_content = raw_content[3:-3].strip()
+            
+        data = json.loads(raw_content)
+        
+        return WebModularReport(
+            risk_level=data.get("risk_level", "Medium"),
+            confidence_score=data.get("confidence_score", 50),
+            detected_language=data.get("detected_language", "English"),
+            specific_analysis=data.get("specific_analysis", "Could not fully parse reasoning."),
+            recommended_action=data.get("recommended_action", "Be careful and verify the source."),
+            threat_vectors=data.get("threat_vectors", []),
+            detected_urls=data.get("detected_urls", [])
         )
 
 
@@ -131,4 +204,37 @@ class OrchestratorLLMProvider(LLMProvider):
             recommended_action="Do not share personal information until verified.",
             database_findings=None,
             web_search_findings=None
+        )
+
+    def analyze_web(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> WebModularReport:
+        if not self.providers:
+            return self._fallback_error_web("No API keys configured.")
+
+        attempts = 0
+        while attempts < len(self.providers):
+            provider = self.providers[self.current_idx]
+            try:
+                return provider.analyze_web(text, media_bytes, mime_type)
+            except Exception as e:
+                error_message = str(e).lower()
+                
+                if any(err in error_message for err in ["429", "quota", "rate limit", "503", "unavailable"]):
+                    print(f"🚨 [ORCHESTRATOR] Key {self.current_idx} Hit Rate Limit/503! Rotating...")
+                    self.current_idx = (self.current_idx + 1) % len(self.providers)
+                    attempts += 1
+                else:
+                    print(f"🚨 [ORCHESTRATOR] Unexpected Error on Key {self.current_idx}: {e}")
+                    return self._fallback_error_web("System encountered an unexpected error. Please try again later.")
+                    
+        return self._fallback_error_web("System is currently overloaded. Please verify manually.")
+
+    def _fallback_error_web(self, message: str) -> WebModularReport:
+        return WebModularReport(
+            risk_level="Medium",
+            confidence_score=50,
+            detected_language="English",
+            specific_analysis=message,
+            recommended_action="Do not share personal information until verified.",
+            threat_vectors=["Error"],
+            detected_urls=[]
         )
