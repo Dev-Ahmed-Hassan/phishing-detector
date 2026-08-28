@@ -23,6 +23,7 @@ class WebModularReport(BaseModel):
     detected_urls: list[str]        # list of URLs found in text/image
     digital_footprint: str          # A summary of the organization's web presence based on OSINT data (positive or negative)
     investigation_log: list[str]    # A technical audit log of the steps the system took to analyze this (e.g. "Extracted claims", "Searched web")
+    sources: list[str] = []         # Array of citation URLs
 
 class LLMProvider:
     def analyze(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> ModularReport:
