@@ -51,7 +51,10 @@ async def analyze_web(
             "specific_analysis": assessment.specific_analysis,
             "recommended_action": assessment.recommended_action,
             "threat_vectors": assessment.threat_vectors,
-            "detected_urls": assessment.detected_urls
+            "detected_urls": assessment.detected_urls,
+            "digital_footprint": assessment.digital_footprint,
+            "investigation_log": assessment.investigation_log,
+            "sources": assessment.sources
         }
     }
 
