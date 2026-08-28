@@ -6,3 +6,4 @@ supabase
 python-multipart
 beautifulsoup4
 python-whois
+duckduckgo-search

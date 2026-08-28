@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional
 import os
 import json
@@ -88,7 +88,8 @@ class GeminiLLMProvider(LLMProvider):
             "specific_analysis": "Detailed explanation of what is fishy...",
             "recommended_action": "Actionable next steps...",
             "threat_vectors": ["Urgency", "Unrealistic Salary", "Upfront Fee"], // Array of short string tags
-            "detected_urls": ["http://suspicious-link.com"] // Array of any URLs found in the text or image
+            "detected_urls": ["http://suspicious-link.com"], // Array of any URLs found in the text or image
+            "sources": ["https://reddit.com/..."] // Array of any citation URLs found in the [SYSTEM WEB SEARCH INTELLIGENCE] block
         }
         """
 
@@ -159,7 +160,8 @@ class GeminiLLMProvider(LLMProvider):
             specific_analysis=data.get("specific_analysis", "Could not fully parse reasoning."),
             recommended_action=data.get("recommended_action", "Be careful and verify the source."),
             threat_vectors=data.get("threat_vectors", []),
-            detected_urls=data.get("detected_urls", [])
+            detected_urls=data.get("detected_urls", []),
+            sources=data.get("sources", [])
         )
 
 
@@ -242,5 +244,6 @@ class OrchestratorLLMProvider(LLMProvider):
             specific_analysis=message,
             recommended_action="Do not share personal information until verified.",
             threat_vectors=["Error"],
-            detected_urls=[]
+            detected_urls=[],
+            sources=[]
         )
