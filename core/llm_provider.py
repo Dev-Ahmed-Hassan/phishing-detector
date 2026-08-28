@@ -94,7 +94,7 @@ class GeminiLLMProvider(LLMProvider):
             "recommended_action": "Actionable next steps...",
             "threat_vectors": ["Urgency", "Unrealistic Salary", "Upfront Fee"], // Array of short string tags
             "detected_urls": ["http://suspicious-link.com"], // Array of any URLs found in the text or image
-            "sources": ["https://reddit.com/..."], // Array of any citation URLs found in the [SYSTEM WEB SEARCH INTELLIGENCE] block
+            "sources": ["https://reddit.com/..."], // MANDATORY: You MUST return EVERY URL found in the CITATIONS section of the [SYSTEM WEB SEARCH INTELLIGENCE] block here. Do not omit any links!
             "investigation_log": ["Analyzed linguistic context and marketing idioms", "Extracted factual claims regarding Ubexis", "Cross-referenced company name against live web directories"] // Array of technical forensic steps taken
         }
         """

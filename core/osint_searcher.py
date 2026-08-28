@@ -127,9 +127,9 @@ class OSINTSearcher:
         Write a strict, professional intelligence report evaluating the claims.
         
         CRITICAL RULES:
-        1. Search engines sometimes return completely irrelevant fallback results (e.g., returning NFL scores when searching for a tech company). If a search snippet is COMPLETELY IRRELEVANT to the claim, IGNORE IT. Do not cite it.
-        2. If all relevant searches return no data, state that the entity has no verifiable digital footprint.
-        3. If you find relevant evidence (good or bad) in the search results, you MUST extract the URL of that search result and include it in your citations.
+        1. Search engines sometimes return completely irrelevant fallback results. If a search snippet is COMPLETELY IRRELEVANT, IGNORE IT.
+        2. HOWEVER, if you find ANY links remotely related to the company/entity (like their LinkedIn, website, social media, or mentions on other sites), you MUST extract the URL and include it in your citations! Even if the footprint is weak, limited, or doesn't prove anything concrete, you MUST provide the link. The user demands concrete URLs.
+        3. If all relevant searches return absolutely no data, state that the entity has no verifiable digital footprint.
         
         Respond ONLY with a JSON object in this exact format:
         {
