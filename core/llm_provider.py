@@ -21,6 +21,8 @@ class WebModularReport(BaseModel):
     recommended_action: str
     threat_vectors: list[str]       # e.g., ["Urgency", "Upfront Fee Request"]
     detected_urls: list[str]        # list of URLs found in text/image
+    digital_footprint: str          # A summary of the organization's web presence based on OSINT data (positive or negative)
+    investigation_log: list[str]    # A technical audit log of the steps the system took to analyze this (e.g. "Extracted claims", "Searched web")
 
 class LLMProvider:
     def analyze(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> ModularReport:
@@ -64,9 +66,10 @@ class GeminiLLMProvider(LLMProvider):
         You are an expert scam and phishing detector specializing in Pakistani job scams.
         
         CRITICAL INSTRUCTIONS:
-        1. Analyze the provided job offer, recruiter message, or uploaded image/audio.
+        1. Analyze the provided job offer, recruiter message, or uploaded image/audio comprehensively.
         2. Language Match: You MUST reply in the EXACT SAME SCRIPT AND LANGUAGE the user used.
-        3. Be Specific: Do not use generic warnings. Point out exactly which sentence, salary figure, or fee request is suspicious.
+        3. Contextual Intelligence: DO NOT literally interpret idioms, marketing jargon, or emojis as financial threats. For example, "BE CHARGED ⚡" means energetic/electric, not a financial fee. Look at the whole context before flagging something.
+        4. Be Specific: Do not use generic warnings. Point out exactly which sentence, salary figure, or fee request is suspicious, if any.
         
         [SYSTEM AUTOMATED URL SCAN] HANDLING:
         If you see a section labeled [SYSTEM AUTOMATED URL SCAN] at the bottom of the prompt, it means our backend actively scraped the URLs in the message. 
@@ -85,11 +88,13 @@ class GeminiLLMProvider(LLMProvider):
             "risk_level": "High" | "Medium" | "Low",
             "confidence_score": 85, // Integer from 0 to 100
             "detected_language": "English",
-            "specific_analysis": "Detailed explanation of what is fishy...",
+            "specific_analysis": "Detailed explanation of what is fishy (or legitimate)...",
+            "digital_footprint": "Explicitly summarize the web footprint of the entity mentioned based ONLY on the provided [SYSTEM WEB SEARCH INTELLIGENCE]. If positive, say so. If none exists, state that they lack a verifiable footprint.",
             "recommended_action": "Actionable next steps...",
             "threat_vectors": ["Urgency", "Unrealistic Salary", "Upfront Fee"], // Array of short string tags
             "detected_urls": ["http://suspicious-link.com"], // Array of any URLs found in the text or image
-            "sources": ["https://reddit.com/..."] // Array of any citation URLs found in the [SYSTEM WEB SEARCH INTELLIGENCE] block
+            "sources": ["https://reddit.com/..."], // Array of any citation URLs found in the [SYSTEM WEB SEARCH INTELLIGENCE] block
+            "investigation_log": ["Analyzed linguistic context and marketing idioms", "Extracted factual claims regarding Ubexis", "Cross-referenced company name against live web directories"] // Array of technical forensic steps taken
         }
         """
 
@@ -161,6 +166,8 @@ class GeminiLLMProvider(LLMProvider):
             recommended_action=data.get("recommended_action", "Be careful and verify the source."),
             threat_vectors=data.get("threat_vectors", []),
             detected_urls=data.get("detected_urls", []),
+            digital_footprint=data.get("digital_footprint", "No digital footprint information provided."),
+            investigation_log=data.get("investigation_log", ["Performed basic heuristic analysis."]),
             sources=data.get("sources", [])
         )
 
@@ -245,5 +252,7 @@ class OrchestratorLLMProvider(LLMProvider):
             recommended_action="Do not share personal information until verified.",
             threat_vectors=["Error"],
             detected_urls=[],
+            digital_footprint="Scan failed due to system error.",
+            investigation_log=["System encountered a critical failure during OSINT extraction."],
             sources=[]
         )
