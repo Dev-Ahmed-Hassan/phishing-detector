@@ -1,18 +1,36 @@
 from fastapi import FastAPI, Request, File, UploadFile, Form
+from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import json
 import os
+import time
 
 from core.llm_provider import OrchestratorLLMProvider
 from core.analyzer_pipeline import AnalyzerPipeline
 from core.response_formatter import ResponseFormatter
 from core.database import Database
+from core.extractor_v2 import ExtractorV2
+from core.osint_collector_v2 import OSINTCollectorV2
+from core.judge_v2 import JudgeV2
 
 # Vercel looks for an instance specifically named "app"
 app = FastAPI()
 
-WIREWEB_API_KEY = os.getenv("WIREWEB_API_KEY", "wire_r1QEC8lzmrmhHSIIZ6cyk-G0h9Z7v4Th")
-WIREWEB_SESSION_ID = os.getenv("WIREWEB_SESSION_ID", "ws_mqr7bc5o")
+# The frontend normally reaches us via its own Next.js rewrite proxy (no CORS needed),
+# but direct browser calls are allowed as a fallback for long-running V2 scans.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://naukrinigran.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+WIREWEB_API_KEY = os.getenv("WIREWEB_API_KEY")
+WIREWEB_SESSION_ID = os.getenv("WIREWEB_SESSION_ID")
 
 # Initialize our modular pipeline and DB
 db = Database()
@@ -57,6 +75,91 @@ async def analyze_web(
             "sources": assessment.sources
         }
     }
+
+@app.post("/api/analyze-v2")
+async def analyze_web_v2(
+    text: str = Form(default=""),
+    file: UploadFile = File(default=None),
+    user_id: str = Form(default="web_user_anonymous")
+):
+    """
+    V2 pipeline: ExtractorV2 -> OSINTCollectorV2 -> JudgeV2.
+    Long-running (30-90s); requires raised function maxDuration.
+    """
+    if not text.strip() and not file:
+        return {"status": "error", "message": "Provide text or an image to analyze."}
+
+    media_bytes = None
+    mime_type = None
+    if file:
+        media_bytes = await file.read()
+        mime_type = file.content_type
+
+    timings = {}
+
+    try:
+        # Phase 1: Extraction (regex + Gemini multimodal)
+        t0 = time.time()
+        extraction = ExtractorV2().extract_information(
+            text=text, media_bytes=media_bytes, mime_type=mime_type
+        )
+        timings["extraction_s"] = round(time.time() - t0, 1)
+
+        master = extraction.get("consolidated_master_result", {})
+        has_entities = any([
+            master.get("organization_name"),
+            master.get("all_unique_urls"),
+            master.get("all_unique_emails"),
+            master.get("all_unique_phones"),
+            master.get("unique_verifiable_claims")
+        ])
+        if not has_entities:
+            return {
+                "status": "success",
+                "report": None,
+                "message": "No verifiable entities (company, links, emails, phones) were found in this message.",
+                "extracted_entities": {
+                    "organization_name": None,
+                    "roles": [],
+                    "salary_or_fee_claims": None,
+                    "urls": [],
+                    "emails": [],
+                    "phones": []
+                },
+                "timings": timings
+            }
+
+        # Phase 2: OSINT evidence collection (100% Python)
+        print(f"[V2] Phase 1 done in {timings['extraction_s']}s. Entity: {master.get('organization_name')}")
+        t1 = time.time()
+        dossier = OSINTCollectorV2().collect_evidence(extraction)
+        timings["osint_collection_s"] = round(time.time() - t1, 1)
+        print(f"[V2] Phase 2 done in {timings['osint_collection_s']}s")
+
+        # Phase 3: AI Judgment
+        t2 = time.time()
+        report = JudgeV2().judge(dossier, original_message=text)
+        timings["judgment_s"] = round(time.time() - t2, 1)
+        timings["total_s"] = round(time.time() - t0, 1)
+        print(f"[V2] Phase 3 done in {timings['judgment_s']}s (total {timings['total_s']}s)")
+
+        return {
+            "status": "success",
+            "report": report,
+            "extracted_entities": {
+                "organization_name": master.get("organization_name"),
+                "roles": master.get("roles", []),
+                "salary_or_fee_claims": master.get("salary_or_fee_claims"),
+                "urls": master.get("all_unique_urls", []),
+                "emails": master.get("all_unique_emails", []),
+                "phones": master.get("all_unique_phones", [])
+            },
+            "timings": timings
+        }
+    except Exception as e:
+        print(f"[V2] Pipeline error: {e}")
+        return {"status": "error", "message": str(e), "timings": timings}
+
 
 @app.post("/webhook")
 async def webhook(request: Request):
