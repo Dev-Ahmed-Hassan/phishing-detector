@@ -1,3 +1,4 @@
+from typing import List, Optional
 from fastapi import FastAPI, Request, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -12,6 +13,7 @@ from core.database import Database
 from core.extractor_v2 import ExtractorV2
 from core.osint_collector_v2 import OSINTCollectorV2
 from core.judge_v2 import JudgeV2
+from core.contact_trace_formatter import ContactTraceFormatter
 
 # Vercel looks for an instance specifically named "app"
 app = FastAPI()
@@ -79,21 +81,31 @@ async def analyze_web(
 @app.post("/api/analyze-v2")
 async def analyze_web_v2(
     text: str = Form(default=""),
-    file: UploadFile = File(default=None),
+    file: Optional[UploadFile] = File(default=None),
+    files: List[UploadFile] = File(default=[]),
     user_id: str = Form(default="web_user_anonymous")
 ):
     """
     V2 pipeline: ExtractorV2 -> OSINTCollectorV2 -> JudgeV2.
     Long-running (30-90s); requires raised function maxDuration.
     """
-    if not text.strip() and not file:
+    all_files = []
+    if file and file.filename:
+        all_files.append(file)
+    if files:
+        for f in files:
+            if f and f.filename and f not in all_files:
+                all_files.append(f)
+
+    if not text.strip() and not all_files:
         return {"status": "error", "message": "Provide text or an image to analyze."}
 
     media_bytes = None
     mime_type = None
-    if file:
-        media_bytes = await file.read()
-        mime_type = file.content_type
+    if all_files:
+        primary_file = all_files[0]
+        media_bytes = await primary_file.read()
+        mime_type = primary_file.content_type
 
     timings = {}
 
@@ -143,6 +155,8 @@ async def analyze_web_v2(
         timings["total_s"] = round(time.time() - t0, 1)
         print(f"[V2] Phase 3 done in {timings['judgment_s']}s (total {timings['total_s']}s)")
 
+        contact_traces = ContactTraceFormatter.format(dossier)
+
         return {
             "status": "success",
             "report": report,
@@ -154,6 +168,7 @@ async def analyze_web_v2(
                 "emails": master.get("all_unique_emails", []),
                 "phones": master.get("all_unique_phones", [])
             },
+            "contact_traces": contact_traces,
             "timings": timings
         }
     except Exception as e:

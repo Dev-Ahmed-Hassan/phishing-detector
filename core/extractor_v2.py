@@ -115,10 +115,10 @@ class ExtractorV2:
             return {"error": "Gemini client not initialized. Check API Key.", "extracted_text": "", "entities": {}, "urls": [], "verifiable_claims": []}
 
         prompt = """
-        You are a Pure Data Extraction and OCR Agent specializing in job offers, recruitment flyers, and messages.
+        You are a Pure Data Extraction, Audio Transcription, and OCR Agent specializing in job offers, recruitment flyers, voice messages, and scam evidence.
         
         YOUR TASKS:
-        1. OCR / Text Extraction: Transcribe ALL visible text accurately. Do not alter or translate the original text.
+        1. OCR / Audio Transcription / Text Extraction: Transcribe ALL visible text from images/documents OR spoken words from audio files accurately. Do not alter or translate the original content.
         2. Entity Extraction: Extract raw entities mentioned without judging or making risk decisions.
            - organization_name: Exact name of the company/organization, or null if none is mentioned.
            - emails: List of contact emails.
