@@ -1,9 +1,10 @@
 from typing import List, Optional
-from fastapi import FastAPI, Request, File, UploadFile, Form
+from fastapi import FastAPI, Request, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 import json
 import os
+import secrets
 import time
 
 from core.llm_provider import OrchestratorLLMProvider
@@ -24,6 +25,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://naukrinigran.vercel.app",
+        "https://naukrinigran-git-test-db-feat-ahmed--hassan.vercel.app",
+        "https://naukrinigran-7xauq1d97-ahmed-hassan.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
     ],
@@ -80,6 +83,7 @@ async def analyze_web(
 
 @app.post("/api/analyze-v2")
 async def analyze_web_v2(
+    background_tasks: BackgroundTasks,
     text: str = Form(default=""),
     file: Optional[UploadFile] = File(default=None),
     files: List[UploadFile] = File(default=[]),
@@ -157,7 +161,9 @@ async def analyze_web_v2(
 
         contact_traces = ContactTraceFormatter.format(dossier)
 
-        return {
+        dossier_id = f"rep_{secrets.token_hex(6)}"
+
+        response_payload = {
             "status": "success",
             "report": report,
             "extracted_entities": {
@@ -169,11 +175,80 @@ async def analyze_web_v2(
                 "phones": master.get("all_unique_phones", [])
             },
             "contact_traces": contact_traces,
-            "timings": timings
+            "timings": timings,
+            "dossier_id": dossier_id
         }
+
+        # Non-blocking background save of dossier permalink and evidence cache
+        if db:
+            background_tasks.add_task(_background_save, response_payload, dossier, report, dossier_id)
+
+        return response_payload
     except Exception as e:
         print(f"[V2] Pipeline error: {e}")
         return {"status": "error", "message": str(e), "timings": timings}
+
+
+def _background_save(payload: dict, dossier: dict, report: dict, custom_id: str):
+    if not db:
+        return
+    try:
+        # 1. Save main dossier to Supabase
+        db.save_dossier(payload, custom_id=custom_id)
+
+        # 2. Extract Gemini-verified evidence items
+        verified_items = []
+        if isinstance(report, dict):
+            # Red flags
+            for f in report.get("red_flags", []):
+                if f.get("source_url"):
+                    verified_items.append({
+                        "url": f["source_url"],
+                        "title": f.get("flag", "Red Flag Evidence"),
+                        "snippet": f.get("snippet_quote", ""),
+                        "category": "community_scam",
+                        "source_type": f.get("source_type", "web")
+                    })
+            # Verified facts
+            for v in report.get("verified_facts", []):
+                if v.get("source_url"):
+                    verified_items.append({
+                        "url": v["source_url"],
+                        "title": v.get("claim", "Verified Fact Evidence"),
+                        "snippet": v.get("snippet_quote", ""),
+                        "category": "verified_fact",
+                        "source_type": v.get("source_type", "web")
+                    })
+            # Links of interest
+            links_dict = report.get("links_of_interest", {})
+            if isinstance(links_dict, dict):
+                for cat, link_list in links_dict.items():
+                    if isinstance(link_list, list):
+                        for l in link_list:
+                            if isinstance(l, dict) and l.get("url"):
+                                verified_items.append({
+                                    "url": l["url"],
+                                    "title": l.get("title", "Link of Interest"),
+                                    "snippet": l.get("explanation", ""),
+                                    "category": cat,
+                                    "source_type": "web"
+                                })
+
+        org_name = dossier.get("target_entity_name")
+        if org_name and verified_items:
+            db.save_evidence_cache(org_name, verified_items)
+    except Exception as err:
+        print(f"Background Save Exception: {err}")
+
+
+@app.get("/api/report/{report_id}")
+async def get_report(report_id: str):
+    if not db:
+        return {"status": "error", "message": "Database not initialized"}
+    report_json = db.get_dossier_by_id(report_id)
+    if report_json:
+        return report_json
+    return {"status": "error", "message": "Report not found or expired"}
 
 
 @app.post("/webhook")

@@ -302,6 +302,8 @@ Remember:
             if isinstance(obj, dict):
                 new = {}
                 for k, v in obj.items():
+                    if k == "community_db_matches":
+                        continue
                     if k == "full_page_content" and isinstance(v, str) and len(v) > MAX_CONTENT_LEN:
                         new[k] = v[:MAX_CONTENT_LEN] + "... [truncated]"
                     else:
@@ -577,8 +579,6 @@ Remember:
             score = 50
             reasons.append("No usable evidence collected; score reset to neutral: 50")
 
-        # Clamp
-        score = max(0, min(100, score))
-
-        justification = "Base score: 50. " + " ".join(reasons) + f" Final score: {score}."
+        formatted_reasons = ". ".join([r.rstrip(".") for r in reasons]) if reasons else ""
+        justification = f"Base score: 50. {formatted_reasons}. Final score: {score}." if formatted_reasons else f"Base score: 50. Final score: {score}."
         return score, justification

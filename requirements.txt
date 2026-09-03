@@ -8,3 +8,4 @@ python-multipart
 beautifulsoup4
 python-whois
 ddgs
+python-dotenv
