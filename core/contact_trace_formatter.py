@@ -101,6 +101,10 @@ class ContactTraceFormatter:
             if domain in EXCLUDED_DOMAINS:
                 continue
 
+            # Filter out random Instagram/Facebook reel/post media ID noise
+            if ("instagram.com" in domain or "facebook.com" in domain) and any(p in url.lower() for p in ["/p/", "/reel/", "/reels/", "/watch/", "/tv/"]):
+                continue
+
             findings.append({
                 "source_url": url,
                 "source_title": title,

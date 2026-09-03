@@ -349,27 +349,21 @@ class OSINTCollectorV2:
         for phone in phones[:2]:  # Cap at 2 numbers to control query budget
             queries = []
 
-            # Normalize: strip spaces/dashes/parentheses
+            # Normalize phone digits
             digits_only = re.sub(r'\D', '', phone)
-
-            # Build query formats
+            target_num = phone
             if digits_only.startswith("92") and len(digits_only) == 12:
-                intl = "+" + digits_only
-                local = "0" + digits_only[2:]
-                queries = [f'"{intl}"', f'"{local}"']
+                target_num = "0" + digits_only[2:]
             elif digits_only.startswith("3") and len(digits_only) == 10:
-                intl = "+92" + digits_only
-                local = "0" + digits_only
-                queries = [f'"{intl}"', f'"{local}"']
+                target_num = "0" + digits_only
             elif digits_only.startswith("03") and len(digits_only) == 11:
-                intl = "+92" + digits_only[1:]
-                local = digits_only
-                queries = [f'"{intl}"', f'"{local}"']
-            elif len(digits_only) == 10:
-                # 10-Digit Global / US Number (e.g. 9088290335)
-                queries = [f'"{digits_only}"', f'"+1{digits_only}"', f'"{phone}"']
-            else:
-                queries = [f'"{phone}"', f'"{digits_only}"']
+                target_num = digits_only
+
+            # Build clean, separate, proven phone queries
+            queries = [
+                f'"{target_num}" scam',
+                f'"{target_num}" fraud complaint'
+            ]
 
             all_results = []
             statuses = []
