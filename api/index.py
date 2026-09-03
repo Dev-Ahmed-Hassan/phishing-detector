@@ -251,6 +251,108 @@ async def get_report(report_id: str):
     return {"status": "error", "message": "Report not found or expired"}
 
 
+# In-Memory Message Buffers for WhatsApp Debouncing
+_whatsapp_buffers = {}
+_whatsapp_buffer_lock = asyncio.Lock()
+
+
+async def _send_wireweb_message(recipient_phone: str, text: str):
+    """Helper to dispatch WhatsApp message via WireWeb API."""
+    if not WIREWEB_API_KEY or not WIREWEB_SESSION_ID:
+        print("WireWeb Notice: Missing WIREWEB_API_KEY or WIREWEB_SESSION_ID environment variables.")
+        return
+    async with httpx.AsyncClient() as client:
+        try:
+            res = await client.post(
+                'https://app.wireweb.co.in/api/v1/messages',
+                json={
+                    "sessionId": WIREWEB_SESSION_ID,
+                    "to": recipient_phone,
+                    "text": text
+                },
+                headers={
+                    "Authorization": f"Bearer {WIREWEB_API_KEY}",
+                    "Content-Type": "application/json"
+                },
+                timeout=10.0
+            )
+            print(f"[WhatsApp] Reply sent to {recipient_phone}:", res.status_code)
+        except Exception as e:
+            print(f"[WhatsApp] Send error to {recipient_phone}: {e}")
+
+
+async def _process_debounced_whatsapp(user_id: str):
+    """Waits 2.5s for rapid consecutive messages, then runs V2 OSINT pipeline."""
+    try:
+        await asyncio.sleep(2.5)
+    except asyncio.CancelledError:
+        return
+
+    async with _whatsapp_buffer_lock:
+        buf = _whatsapp_buffers.pop(user_id, None)
+
+    if not buf or not buf.get("texts"):
+        return
+
+    full_text = "\n\n".join(buf["texts"])
+    recipient_phone = buf.get("recipient_phone")
+
+    if not recipient_phone:
+        print(f"[WhatsApp] Error: No recipient phone for user {user_id}")
+        return
+
+    print(f"[WhatsApp V2] Executing debounced V2 scan for {user_id} ({len(buf['texts'])} messages concatenated)")
+
+    # Send initial acknowledgment message to user
+    await _send_wireweb_message(
+        recipient_phone,
+        "⏳ *Naukri Nigran Investigation Started*\n\nProcessing your job offer through our V2 OSINT Search Engine. Please hold on..."
+    )
+
+    try:
+        # Phase 1: Extraction
+        t0 = time.time()
+        extraction = ExtractorV2().extract_information(text=full_text)
+
+        # Phase 2: OSINT Evidence Collection
+        dossier = OSINTCollectorV2().collect_evidence(extraction)
+
+        # Phase 3: AI Judgment
+        report = JudgeV2().judge(dossier, original_message=full_text)
+
+        contact_traces = ContactTraceFormatter.format(dossier)
+        dossier_id = f"rep_{secrets.token_hex(6)}"
+
+        response_payload = {
+            "status": "success",
+            "report": report,
+            "extracted_entities": {
+                "organization_name": extraction.get("consolidated_master_result", {}).get("organization_name"),
+                "roles": extraction.get("consolidated_master_result", {}).get("roles", []),
+                "salary_or_fee_claims": extraction.get("consolidated_master_result", {}).get("salary_or_fee_claims"),
+                "urls": extraction.get("consolidated_master_result", {}).get("all_unique_urls", []),
+                "emails": extraction.get("consolidated_master_result", {}).get("all_unique_emails", []),
+                "phones": extraction.get("consolidated_master_result", {}).get("all_unique_phones", [])
+            },
+            "contact_traces": contact_traces,
+            "dossier_id": dossier_id
+        }
+
+        # Background save of dossier permalink and evidence cache
+        if db:
+            _background_save(response_payload, dossier, report, dossier_id)
+
+        # Format V2 WhatsApp reply
+        reply_msg = ResponseFormatter.format_whatsapp_v2(response_payload, dossier_id=dossier_id)
+
+        # Dispatch reply to WhatsApp user
+        await _send_wireweb_message(recipient_phone, reply_msg)
+    except Exception as err:
+        print(f"[WhatsApp V2] Execution Exception for {user_id}: {err}")
+        err_msg = "⚠️ *Analysis Error*\n\nUnable to complete automated OSINT search for this offer. Please try again or scan directly on our website:\nhttps://naukrinigran.vercel.app"
+        await _send_wireweb_message(recipient_phone, err_msg)
+
+
 @app.post("/webhook")
 async def webhook(request: Request):
     try:
@@ -258,73 +360,66 @@ async def webhook(request: Request):
     except Exception:
         return {"status": "error", "message": "Invalid JSON"}
 
-    print("--- Incoming Webhook Event ---")
-    print(json.dumps(body, indent=2))
-    
-    # We always use the anonymous ID for tracking the session
-    user_id = body.get("sender") or body.get("chat") or "unknown_user"
-    message_text = body.get("text") or body.get("message")
-        
     if body.get("fromMe") is True:
         return {"status": "skipped", "reason": "Self message"}
-        
-    if not message_text:
+
+    user_id = body.get("sender") or body.get("chat") or "unknown_user"
+    message_text = body.get("text") or body.get("message") or ""
+
+    if not message_text.strip():
         return {"status": "ignored", "reason": "No text content"}
 
-    print(f'Processing message from {user_id}: "{message_text}"')
-    
-    # --- ACTIVATION GATEKEEPER LOGIC ---
-    user = db.get_or_create_user(user_id) if db else None
-    
-    is_registered = False
-    recipient_phone = body.get("from") # Default fallback if DB fails
-    
-    if user:
-        recipient_phone = user.get("phone_number")
-        is_registered = bool(recipient_phone)
-        
-    if not is_registered and db:
-        # Check if they are trying to activate
-        if message_text.strip().startswith("ACTIVATE_SCAM_DETECTOR="):
-            real_phone = message_text.split("=")[1].strip()
-            db.register_phone_number(user_id, real_phone)
-            
-            reply_message = "*✅ Success! Your number is now registered.*\n\nPlease re-send any previous scam messages you want me to analyze!"
-            recipient_phone = real_phone
-        else:
-            # Silently log their message and ignore
-            db.save_message(user_id, "user", message_text)
-            print(f"Silently logged message for unregistered user {user_id}")
-            return {"status": "ignored", "reason": "User unregistered. Silently logged."}
-    else:
-        # User IS registered (or DB is disabled)
-        # 1. Run the AI Pipeline with Context
-        assessment = pipeline.process(user_id, message_text)
-        # 2. Format specifically for WhatsApp
-        reply_message = ResponseFormatter.format_whatsapp(assessment)
-    
-    # If we somehow still don't have a recipient, we can't send a message
-    if not recipient_phone:
-        print("Error: No recipient phone number available to send reply.")
-        return {"status": "error", "reason": "No recipient phone number"}
+    print(f'Incoming WhatsApp message from {user_id}: "{message_text[:80]}..."')
 
-    # Send the reply back to WireWeb using the REAL phone number
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(
-                'https://app.wireweb.co.in/api/v1/messages',
-                json={
-                    "sessionId": WIREWEB_SESSION_ID,
-                    "to": recipient_phone,
-                    "text": reply_message
-                },
-                headers={
-                    "Authorization": f"Bearer {WIREWEB_API_KEY}",
-                    "Content-Type": "application/json"
-                }
-            )
-            print(f"Sent reply to {recipient_phone}:", response.text)
-            return {"status": "success"}
-        except Exception as e:
-            print("Error sending message:", str(e))
-            return {"status": "error", "message": str(e)}
+    # --- ACTIVATION GATEKEEPER ---
+    user = db.get_or_create_user(user_id) if db else None
+    recipient_phone = body.get("from")
+    if user:
+        recipient_phone = user.get("phone_number") or recipient_phone
+
+    clean_text = message_text.strip()
+
+    # Check activation triggers (e.g. ACTIVATE_0340320... or ACTIVATE_SCAM_DETECTOR=0340320...)
+    if clean_text.startswith("ACTIVATE_"):
+        real_phone = clean_text.replace("ACTIVATE_SCAM_DETECTOR=", "").replace("ACTIVATE_", "").strip()
+        if db:
+            db.register_phone_number(user_id, real_phone)
+        recipient_phone = real_phone or recipient_phone
+
+        welcome_msg = (
+            "✅ *ACCOUNT ACTIVATED / اکاؤنٹ کی توثیق ہو گئی*\n\n"
+            "Welcome to Naukri Nigran! Forward any suspicious job text message here for instant AI verification.\n\n"
+            "⚠️ *NOTE:* This WhatsApp channel currently processes TEXT job offers. "
+            "For flyer images or audio files, please scan directly on our website:\n"
+            "👉 https://naukrinigran.vercel.app"
+        )
+        if recipient_phone:
+            await _send_wireweb_message(recipient_phone, welcome_msg)
+        return {"status": "activated", "phone": recipient_phone}
+
+    if not recipient_phone and db:
+        db.save_message(user_id, "user", message_text)
+        return {"status": "ignored", "reason": "User unregistered. Silently logged."}
+
+    # --- DEBOUNCE MESSAGE BUFFERING ---
+    async with _whatsapp_buffer_lock:
+        if user_id not in _whatsapp_buffers:
+            _whatsapp_buffers[user_id] = {
+                "texts": [],
+                "task": None,
+                "recipient_phone": recipient_phone
+            }
+        else:
+            # Cancel prior task if user sends another message rapidly
+            old_task = _whatsapp_buffers[user_id].get("task")
+            if old_task and not old_task.done():
+                old_task.cancel()
+
+        _whatsapp_buffers[user_id]["texts"].append(clean_text)
+        _whatsapp_buffers[user_id]["recipient_phone"] = recipient_phone or _whatsapp_buffers[user_id]["recipient_phone"]
+
+        # Launch 2.5s debounce task
+        new_task = asyncio.create_task(_process_debounced_whatsapp(user_id))
+        _whatsapp_buffers[user_id]["task"] = new_task
+
+    return {"status": "buffered", "user_id": user_id, "pending_count": len(_whatsapp_buffers[user_id]["texts"])}
