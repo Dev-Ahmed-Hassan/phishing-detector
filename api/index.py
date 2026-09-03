@@ -15,6 +15,7 @@ from core.extractor_v2 import ExtractorV2
 from core.osint_collector_v2 import OSINTCollectorV2
 from core.judge_v2 import JudgeV2
 from core.contact_trace_formatter import ContactTraceFormatter
+from core.translator_v2 import ReportTranslatorV2
 
 # Vercel looks for an instance specifically named "app"
 app = FastAPI()
@@ -230,6 +231,26 @@ async def analyze_web_v2(
     except Exception as e:
         print(f"[V2] Pipeline error: {e}")
         return {"status": "error", "message": str(e), "timings": timings}
+
+
+@app.post("/api/translate-report")
+async def translate_report_endpoint(payload: dict):
+    summary = payload.get("summary", "")
+    key_findings = payload.get("key_findings", [])
+    red_flags = payload.get("red_flags", [])
+    recommended_actions = payload.get("recommended_actions", [])
+
+    if not summary and not key_findings and not red_flags:
+        return {"status": "error", "message": "Nothing to translate"}
+
+    translator = ReportTranslatorV2()
+    result = translator.translate_report(
+        summary=summary,
+        key_findings=key_findings,
+        red_flags=red_flags,
+        recommended_actions=recommended_actions
+    )
+    return result
 
 
 def _background_save(payload: dict, dossier: dict, report: dict, custom_id: str):
