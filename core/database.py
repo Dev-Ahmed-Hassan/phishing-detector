@@ -172,10 +172,17 @@ class Database:
                             "evidence_summary": f"Domain used by {target_entity}: {takeaway[:150]}"
                         })
 
-                # Batch insert threat index rows if any exist
+                # Batch insert threat index rows if any exist (with deduplication)
                 if indexed_rows:
                     try:
-                        self.client.table("entity_threat_index").insert(indexed_rows).execute()
+                        unique_rows = []
+                        for row in indexed_rows:
+                            existing = self.client.table("entity_threat_index").select("id").eq("entity_type", row["entity_type"]).eq("entity_value", row["entity_value"]).execute()
+                            if not existing.data:
+                                unique_rows.append(row)
+
+                        if unique_rows:
+                            self.client.table("entity_threat_index").insert(unique_rows).execute()
                     except Exception as idx_err:
                         print(f"Supabase Threat Indexing Warning: {idx_err}")
 
