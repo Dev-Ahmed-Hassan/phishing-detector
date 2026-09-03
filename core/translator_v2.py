@@ -27,10 +27,11 @@ class ReportTranslatorV2:
     """
     On-Demand & Background Pre-translation Engine for ScamLess Investigation Dossiers.
     Translates English scan reports into Urdu Script (`ur`) and Roman Urdu (`roman_ur`)
-    simultaneously with multi-key Gemini API rotation.
+    simultaneously using the same model engine as JudgeV2.
     """
 
-    def __init__(self, api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None, model: str = "gemini-3.5-flash-lite"):
+        self.model = model
         self.clients = []
         if api_key and genai:
             try:
@@ -91,7 +92,7 @@ CRITICAL CONSTRAINTS:
 - Tone must be clear, urgent, and professional.
 """
 
-        models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+        models_to_try = [self.model, "gemini-3.6-flash", "gemini-2.5-flash-lite"]
 
         for client in self.clients:
             for model_name in models_to_try:
