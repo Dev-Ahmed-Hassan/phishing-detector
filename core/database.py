@@ -369,28 +369,13 @@ class Database:
                 clean_org = org_name.strip().lower()
                 existing = self.client.table("entity_threat_index").select("id").eq("entity_type", "organization").eq("entity_value", clean_org).execute()
                 if not existing.data:
-                    self.client.table("entity_threat_index").insert({
-                        "dossier_id": f"community_report_{report_id}",
+                    record = {
                         "entity_type": "organization",
                         "entity_value": clean_org,
                         "risk_level": "likely_scam",
                         "evidence_summary": f"Community verified scam report: {proof_text[:200]}"
-                    }).execute()
-
-            # Insert into scraped_evidence_cache as verified evidence snippet
-            if org_name:
-                clean_org = org_name.strip().lower()
-                cache_record = {
-                    "entity_name": clean_org,
-                    "url": f"https://naukrinigran.vercel.app/report-scam#{report_id}",
-                    "title": f"Verified Community Scam Tip: {org_name}",
-                    "snippet": f"Verified Scam Proof ({scam_channel or 'Direct'}): {proof_text[:250]}",
-                    "category": "community_scam",
-                    "source_type": "admin_verified_report"
-                }
-                ex_cache = self.client.table("scraped_evidence_cache").select("id").eq("url", cache_record["url"]).execute()
-                if not ex_cache.data:
-                    self.client.table("scraped_evidence_cache").insert(cache_record).execute()
+                    }
+                    self.client.table("entity_threat_index").insert(record).execute()
 
             # Parse and index phone numbers if present in scam_channel
             if scam_channel:
@@ -400,13 +385,13 @@ class Database:
                     clean_ph = re.sub(r"[^\d+]", "", ph)
                     ex = self.client.table("entity_threat_index").select("id").eq("entity_type", "phone").eq("entity_value", clean_ph).execute()
                     if not ex.data:
-                        self.client.table("entity_threat_index").insert({
-                            "dossier_id": f"community_report_{report_id}",
+                        record_ph = {
                             "entity_type": "phone",
                             "entity_value": clean_ph,
                             "risk_level": "likely_scam",
                             "evidence_summary": f"Reported scam phone channel for {org_name}"
-                        }).execute()
+                        }
+                        self.client.table("entity_threat_index").insert(record_ph).execute()
 
             return {"status": "success", "action": "approved"}
         except Exception as e:
