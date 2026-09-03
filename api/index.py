@@ -25,6 +25,9 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "https://scamless.vercel.app",
+        "https://scamless-ai.vercel.app",
+        "https://scamless-web.vercel.app",
         "https://naukrinigran.vercel.app",
         "https://naukrinigran-git-public-report-feat-ahmed--hassan.vercel.app",
         "https://naukrinigran-git-test-db-feat-ahmed--hassan.vercel.app",
