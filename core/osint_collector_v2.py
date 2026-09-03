@@ -18,7 +18,8 @@ try:
 except ImportError:
     from duckduckgo_search import DDGS
 
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=RuntimeWarning)
+warnings.filterwarnings("ignore", category=ResourceWarning)
 
 class OSINTCollectorV2:
     """
@@ -556,6 +557,14 @@ class OSINTCollectorV2:
     # ==========================================================================
     def _deep_scrape_url(self, url: str) -> Optional[str]:
         if not url or not url.startswith('http'):
+            return None
+
+        # Ignore generic help/login/support portals to prevent context noise
+        IGNORED_DOMAINS = [
+            "support.microsoft.com", "accounts.google.com", "support.google.com",
+            "facebook.com/login", "twitter.com/i/flow/login", "apple.com/support"
+        ]
+        if any(dom in url.lower() for dom in IGNORED_DOMAINS):
             return None
 
         headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'}
