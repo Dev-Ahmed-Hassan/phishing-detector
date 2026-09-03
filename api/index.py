@@ -82,7 +82,7 @@ async def verify_report(payload: dict):
     if not db or not report_id:
         return {"status": "error", "message": "Invalid report ID"}
 
-    res = db.verify_community_report(int(report_id), action=action)
+    res = db.verify_community_report(int(report_id), action=action, edited_data=payload)
     return res
 
 @app.get("/")

@@ -330,8 +330,8 @@ class Database:
             print(f"Supabase Error (get_pending_community_reports): {e}")
             return []
 
-    def verify_community_report(self, report_id: int, action: str = "approve") -> dict:
-        """Approve or reject a community report. If approved, indexes entities into entity_threat_index."""
+    def verify_community_report(self, report_id: int, action: str = "approve", edited_data: dict = None) -> dict:
+        """Approve or reject a community report with admin edits and media removal."""
         if not self.client:
             return {"status": "error", "message": "Database client unavailable"}
         try:
@@ -345,12 +345,24 @@ class Database:
                 return {"status": "error", "message": "Report not found"}
 
             item = rep.data[0]
-            org_name = item.get("org_name")
-            scam_channel = item.get("scam_channel")
-            proof_text = item.get("proof_text")
+            
+            # Use admin edited fields if provided
+            org_name = (edited_data.get("edited_org_name") if edited_data else None) or item.get("org_name")
+            scam_channel = (edited_data.get("edited_scam_channel") if edited_data else None) or item.get("scam_channel")
+            proof_text = (edited_data.get("edited_proof_text") if edited_data else None) or item.get("proof_text")
+            remove_media = edited_data.get("remove_media", False) if edited_data else False
 
-            # Update status to verified_scam
-            self.client.table("community_scam_reports").update({"status": "verified_scam"}).eq("id", report_id).execute()
+            update_payload = {
+                "status": "verified_scam",
+                "org_name": org_name,
+                "scam_channel": scam_channel,
+                "proof_text": proof_text
+            }
+            if remove_media:
+                update_payload["proof_image"] = None
+
+            # Update status & edited fields in community_scam_reports
+            self.client.table("community_scam_reports").update(update_payload).eq("id", report_id).execute()
 
             # Insert target org into entity_threat_index
             if org_name:
@@ -365,7 +377,22 @@ class Database:
                         "evidence_summary": f"Community verified scam report: {proof_text[:200]}"
                     }).execute()
 
-            # If scam channel contains a phone number, index it too!
+            # Insert into scraped_evidence_cache as verified evidence snippet
+            if org_name:
+                clean_org = org_name.strip().lower()
+                cache_record = {
+                    "entity_name": clean_org,
+                    "url": f"https://naukrinigran.vercel.app/report-scam#{report_id}",
+                    "title": f"Verified Community Scam Tip: {org_name}",
+                    "snippet": f"Verified Scam Proof ({scam_channel or 'Direct'}): {proof_text[:250]}",
+                    "category": "community_scam",
+                    "source_type": "admin_verified_report"
+                }
+                ex_cache = self.client.table("scraped_evidence_cache").select("id").eq("url", cache_record["url"]).execute()
+                if not ex_cache.data:
+                    self.client.table("scraped_evidence_cache").insert(cache_record).execute()
+
+            # Parse and index phone numbers if present in scam_channel
             if scam_channel:
                 import re
                 phones = re.findall(r"(?:\+92[-\s]?3\d{2}|03\d{2})[-\s]?\d{7}\b", scam_channel)
