@@ -18,12 +18,30 @@ class ContactTraceFormatter:
     def format(dossier: Dict[str, Any]) -> List[Dict[str, Any]]:
         traces: List[Dict[str, Any]] = []
         for db_match in dossier.get("community_db_matches", []):
-            traces.append(ContactTraceFormatter._format_db_match(db_match))
+            formatted_match = ContactTraceFormatter._format_db_match(db_match)
+            if formatted_match:
+                traces.append(formatted_match)
+
         for phone_search in dossier.get("phone_number_searches", []):
-            traces.append(ContactTraceFormatter._format_phone(phone_search))
+            formatted_phone = ContactTraceFormatter._format_phone(phone_search)
+            if formatted_phone:
+                traces.append(formatted_phone)
+
         for email_intel in dossier.get("email_domain_intelligence", []):
-            traces.append(ContactTraceFormatter._format_email(email_intel))
-        return traces
+            formatted_email = ContactTraceFormatter._format_email(email_intel)
+            if formatted_email:
+                traces.append(formatted_email)
+
+        # Deduplicate traces by value
+        seen = set()
+        unique_traces = []
+        for t in traces:
+            val_key = f"{t.get('type')}:{str(t.get('value', '')).lower().strip()}"
+            if val_key not in seen:
+                seen.add(val_key)
+                unique_traces.append(t)
+
+        return unique_traces
 
     @staticmethod
     def _format_db_match(db_match: Dict[str, Any]) -> Dict[str, Any]:
@@ -101,9 +119,16 @@ class ContactTraceFormatter:
         }
 
     @staticmethod
-    def _format_email(email_intel: Dict[str, Any]) -> Dict[str, Any]:
+    def _format_email(email_intel: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         value = email_intel.get("sample_email", "")
         domain = email_intel.get("email_domain", "")
+
+        # Ignore invalid non-email/non-domain strings (e.g. raw org name 'codealpha')
+        if not value and not domain:
+            return None
+        if "@" not in str(value) and "." not in str(domain):
+            return None
+
         creation_date = email_intel.get("whois_creation_date")
         whois_status = email_intel.get("whois_lookup_status", "failed")
 
