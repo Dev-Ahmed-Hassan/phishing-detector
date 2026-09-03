@@ -349,20 +349,25 @@ class OSINTCollectorV2:
         for phone in phones[:2]:  # Cap at 2 numbers to control query budget
             queries = []
 
-            # Normalize phone digits
+            # Normalize phone digits & generate both local and international formats
             digits_only = re.sub(r'\D', '', phone)
-            target_num = phone
-            if digits_only.startswith("92") and len(digits_only) == 12:
-                target_num = "0" + digits_only[2:]
-            elif digits_only.startswith("3") and len(digits_only) == 10:
-                target_num = "0" + digits_only
-            elif digits_only.startswith("03") and len(digits_only) == 11:
-                target_num = digits_only
+            local_fmt = phone
+            intl_fmt = phone
 
-            # Build clean, separate, proven phone queries
+            if digits_only.startswith("92") and len(digits_only) == 12:
+                local_fmt = "0" + digits_only[2:]
+                intl_fmt = "+" + digits_only
+            elif digits_only.startswith("3") and len(digits_only) == 10:
+                local_fmt = "0" + digits_only
+                intl_fmt = "+92" + digits_only
+            elif digits_only.startswith("03") and len(digits_only) == 11:
+                local_fmt = digits_only
+                intl_fmt = "+92" + digits_only[1:]
+
+            # Query BOTH local format (0335...) and international format (+92335...)
             queries = [
-                f'"{target_num}" scam',
-                f'"{target_num}" fraud complaint'
+                f'"{local_fmt}" scam',
+                f'"{intl_fmt}" scam'
             ]
 
             all_results = []
