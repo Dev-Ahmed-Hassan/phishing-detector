@@ -83,18 +83,35 @@ class ContactTraceFormatter:
         results = phone_search.get("results", [])
         status = phone_search.get("search_status", "failed")
 
+        EXCLUDED_DOMAINS = {
+            "walmart.com", "amazon.com", "ebay.com", "lowes.com",
+            "webstaurantstore.com", "target.com", "alibaba.com",
+            "aliexpress.com", "etsy.com", "bestbuy.com", "homedepot.com"
+        }
+
         findings = []
-        for r in results[:5]:
+        for r in results:
             url = r.get("href") or r.get("url", "")
             title = r.get("title", "")
             snippet = r.get("body") or r.get("snippet", "")
             if not url:
                 continue
+
+            domain = url.split("//")[-1].split("/")[0].replace("www.", "").lower()
+            if domain in EXCLUDED_DOMAINS:
+                continue
+
+            # Filter out random Instagram/Facebook reel/post media ID noise
+            if ("instagram.com" in domain or "facebook.com" in domain) and any(p in url.lower() for p in ["/p/", "/reel/", "/reels/", "/watch/", "/tv/"]):
+                continue
+
             findings.append({
                 "source_url": url,
                 "source_title": title,
                 "snippet": snippet,
             })
+            if len(findings) >= 5:
+                break
 
         risk_signal = "unknown"
         if status == "ok" and findings:

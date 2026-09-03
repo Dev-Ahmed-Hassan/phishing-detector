@@ -349,27 +349,26 @@ class OSINTCollectorV2:
         for phone in phones[:2]:  # Cap at 2 numbers to control query budget
             queries = []
 
-            # Normalize: strip spaces/dashes/parentheses
+            # Normalize phone digits & generate both local and international formats
             digits_only = re.sub(r'\D', '', phone)
+            local_fmt = phone
+            intl_fmt = phone
 
-            # Build query formats
             if digits_only.startswith("92") and len(digits_only) == 12:
-                intl = "+" + digits_only
-                local = "0" + digits_only[2:]
-                queries = [f'"{intl}"', f'"{local}"']
+                local_fmt = "0" + digits_only[2:]
+                intl_fmt = "+" + digits_only
             elif digits_only.startswith("3") and len(digits_only) == 10:
-                intl = "+92" + digits_only
-                local = "0" + digits_only
-                queries = [f'"{intl}"', f'"{local}"']
+                local_fmt = "0" + digits_only
+                intl_fmt = "+92" + digits_only
             elif digits_only.startswith("03") and len(digits_only) == 11:
-                intl = "+92" + digits_only[1:]
-                local = digits_only
-                queries = [f'"{intl}"', f'"{local}"']
-            elif len(digits_only) == 10:
-                # 10-Digit Global / US Number (e.g. 9088290335)
-                queries = [f'"{digits_only}"', f'"+1{digits_only}"', f'"{phone}"']
-            else:
-                queries = [f'"{phone}"', f'"{digits_only}"']
+                local_fmt = digits_only
+                intl_fmt = "+92" + digits_only[1:]
+
+            # Query BOTH local format (0335...) and international format (+92335...)
+            queries = [
+                f'"{local_fmt}" scam',
+                f'"{intl_fmt}" scam'
+            ]
 
             all_results = []
             statuses = []

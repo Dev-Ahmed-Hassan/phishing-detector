@@ -25,22 +25,65 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://naukrinigran.vercel.app",
+        "https://naukrinigran-git-public-report-feat-ahmed--hassan.vercel.app",
         "https://naukrinigran-git-test-db-feat-ahmed--hassan.vercel.app",
         "https://naukrinigran-7xauq1d97-ahmed-hassan.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "*"
     ],
-    allow_methods=["GET", "POST"],
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
 WIREWEB_API_KEY = os.getenv("WIREWEB_API_KEY")
 WIREWEB_SESSION_ID = os.getenv("WIREWEB_SESSION_ID")
 
+ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "naukri_nigran_admin_2026")
+
 # Initialize our modular pipeline and DB
 db = Database()
 llm_provider = OrchestratorLLMProvider()
 pipeline = AnalyzerPipeline(llm_provider, db=db)
+
+
+@app.post("/api/submit-community-report")
+async def submit_community_report(payload: dict):
+    if not db:
+        return {"status": "error", "message": "Database unavailable"}
+    org_name = payload.get("org_name")
+    proof_text = payload.get("proof_text")
+
+    if not org_name or not proof_text:
+        return {"status": "error", "message": "Organization name and proof statement are required."}
+
+    res = db.submit_community_report(payload)
+    return res
+
+
+@app.get("/api/admin/pending-reports")
+async def get_pending_reports(admin_key: str):
+    if admin_key != ADMIN_SECRET_KEY:
+        return {"status": "error", "message": "Unauthorized Admin Key"}
+    if not db:
+        return []
+    return db.get_pending_community_reports()
+
+
+@app.post("/api/admin/verify-report")
+async def verify_report(payload: dict):
+    admin_key = payload.get("admin_key")
+    report_id = payload.get("report_id")
+    action = payload.get("action", "approve")
+
+    if admin_key != ADMIN_SECRET_KEY:
+        return {"status": "error", "message": "Unauthorized Admin Key"}
+    if not db or not report_id:
+        return {"status": "error", "message": "Invalid report ID"}
+
+    res = db.verify_community_report(int(report_id), action=action, edited_data=payload)
+    return res
 
 @app.get("/")
 def read_root():
