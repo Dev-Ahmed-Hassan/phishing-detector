@@ -25,12 +25,15 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "https://naukrinigran.vercel.app",
+        "https://naukrinigran-git-public-report-feat-ahmed--hassan.vercel.app",
         "https://naukrinigran-git-test-db-feat-ahmed--hassan.vercel.app",
         "https://naukrinigran-7xauq1d97-ahmed-hassan.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "*"
     ],
-    allow_methods=["GET", "POST"],
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
