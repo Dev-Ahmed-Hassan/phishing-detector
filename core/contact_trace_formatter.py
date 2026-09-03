@@ -59,7 +59,7 @@ class ContactTraceFormatter:
             "risk_signal": "flagged",
             "findings": [
                 {
-                    "source_url": f"https://naukrinigran.vercel.app/report/{dossier_id}" if dossier_id else "",
+                    "source_url": f"/report/{dossier_id}" if dossier_id else "",
                     "source_title": f"Naukri Nigran Community Threat Database ({risk_lvl.upper()})",
                     "snippet": evidence,
                 }
