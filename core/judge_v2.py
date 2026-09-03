@@ -302,6 +302,8 @@ Remember:
             if isinstance(obj, dict):
                 new = {}
                 for k, v in obj.items():
+                    if k == "community_db_matches":
+                        continue
                     if k == "full_page_content" and isinstance(v, str) and len(v) > MAX_CONTENT_LEN:
                         new[k] = v[:MAX_CONTENT_LEN] + "... [truncated]"
                     else:
