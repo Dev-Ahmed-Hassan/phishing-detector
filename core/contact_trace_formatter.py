@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 
 class ContactTraceFormatter:
