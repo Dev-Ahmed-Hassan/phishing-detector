@@ -82,3 +82,148 @@ class Database:
         except Exception as e:
             print(f"Supabase Error (get_conversation_history): {e}")
             return ""
+
+    def save_dossier(self, report_data: dict) -> str:
+        """Saves a complete dossier report to Supabase and indexes high-risk contact entities."""
+        if not self.client or not report_data:
+            return ""
+
+        try:
+            import secrets
+            import re
+
+            dossier_id = f"rep_{secrets.token_hex(6)}"
+
+            # Extract top-level report metadata
+            report_body = report_data.get("report") or {}
+            metadata = report_body.get("metadata") or {}
+            exec_summary = report_body.get("executive_summary") or {}
+
+            target_entity = metadata.get("target_entity") or "Unknown Entity"
+            verdict = exec_summary.get("verdict") or "inconclusive"
+            confidence_score = exec_summary.get("confidence_score") or 0
+
+            # Insert primary dossier record
+            dossier_record = {
+                "id": dossier_id,
+                "target_entity": target_entity,
+                "verdict": verdict,
+                "confidence_score": confidence_score,
+                "report_json": report_data,
+            }
+            self.client.table("dossiers").insert(dossier_record).execute()
+
+            # ONLY index contact entities IF verdict is high_risk or suspicious (Prevents false positive clean numbers!)
+            if verdict in ["high_risk", "suspicious"]:
+                extracted = report_data.get("extracted_entities") or {}
+                phones = extracted.get("phones") or []
+                emails = extracted.get("emails") or []
+                urls = extracted.get("urls") or []
+
+                takeaway = (exec_summary.get("one_sentence_takeaway") or {}).get("en") or exec_summary.get("primary_threat_vector") or "Flagged in OSINT analysis"
+
+                indexed_rows = []
+
+                # Index phones (normalize digits)
+                for ph in phones:
+                    clean_ph = re.sub(r"[^\d+]", "", str(ph))
+                    if len(clean_ph) >= 7:
+                        indexed_rows.append({
+                            "dossier_id": dossier_id,
+                            "entity_type": "phone",
+                            "entity_value": clean_ph,
+                            "risk_level": verdict,
+                            "evidence_summary": f"Associated with {target_entity}: {takeaway[:150]}"
+                        })
+
+                # Index emails
+                for em in emails:
+                    clean_em = str(em).strip().lower()
+                    if "@" in clean_em:
+                        indexed_rows.append({
+                            "dossier_id": dossier_id,
+                            "entity_type": "email",
+                            "entity_value": clean_em,
+                            "risk_level": verdict,
+                            "evidence_summary": f"Email contact for {target_entity}: {takeaway[:150]}"
+                        })
+
+                # Index domains from URLs
+                for u in urls:
+                    clean_url = str(u).strip().lower()
+                    domain_match = re.search(r"https?://([^/]+)", clean_url)
+                    if domain_match:
+                        domain = domain_match.group(1).replace("www.", "")
+                        indexed_rows.append({
+                            "dossier_id": dossier_id,
+                            "entity_type": "domain",
+                            "entity_value": domain,
+                            "risk_level": verdict,
+                            "evidence_summary": f"Domain domain used by {target_entity}: {takeaway[:150]}"
+                        })
+
+                # Batch insert threat index rows if any exist
+                if indexed_rows:
+                    try:
+                        self.client.table("entity_threat_index").insert(indexed_rows).execute()
+                    except Exception as idx_err:
+                        print(f"Supabase Threat Indexing Warning: {idx_err}")
+
+            return dossier_id
+        except Exception as e:
+            print(f"Supabase Error (save_dossier): {e}")
+            return ""
+
+    def get_dossier_by_id(self, dossier_id: str) -> dict:
+        """Fetches a saved dossier from Supabase by share ID."""
+        if not self.client or not dossier_id:
+            return None
+
+        try:
+            res = self.client.table("dossiers").select("*").eq("id", dossier_id).execute()
+            if res.data and len(res.data) > 0:
+                return res.data[0].get("report_json")
+            return None
+        except Exception as e:
+            print(f"Supabase Error (get_dossier_by_id): {e}")
+            return None
+
+    def search_threat_index(self, phones: list = None, emails: list = None, domains: list = None) -> list:
+        """Queries entity_threat_index for previously reported scam contact entities."""
+        if not self.client:
+            return []
+
+        results = []
+        try:
+            # Query phones
+            if phones:
+                for ph in phones:
+                    import re
+                    clean_ph = re.sub(r"[^\d+]", "", str(ph))
+                    if len(clean_ph) >= 7:
+                        res = self.client.table("entity_threat_index").select("*").eq("entity_type", "phone").eq("entity_value", clean_ph).limit(3).execute()
+                        if res.data:
+                            results.extend(res.data)
+
+            # Query emails
+            if emails:
+                for em in emails:
+                    clean_em = str(em).strip().lower()
+                    if "@" in clean_em:
+                        res = self.client.table("entity_threat_index").select("*").eq("entity_type", "email").eq("entity_value", clean_em).limit(3).execute()
+                        if res.data:
+                            results.extend(res.data)
+
+            # Query domains
+            if domains:
+                for dom in domains:
+                    clean_dom = str(dom).strip().lower().replace("www.", "")
+                    res = self.client.table("entity_threat_index").select("*").eq("entity_type", "domain").eq("entity_value", clean_dom).limit(3).execute()
+                    if res.data:
+                        results.extend(res.data)
+
+            return results
+        except Exception as e:
+            print(f"Supabase Error (search_threat_index): {e}")
+            return []
+

@@ -157,7 +157,7 @@ async def analyze_web_v2(
 
         contact_traces = ContactTraceFormatter.format(dossier)
 
-        return {
+        response_payload = {
             "status": "success",
             "report": report,
             "extracted_entities": {
@@ -171,9 +171,26 @@ async def analyze_web_v2(
             "contact_traces": contact_traces,
             "timings": timings
         }
+
+        # Save to Supabase and generate unique dossier_id for sharing
+        dossier_id = db.save_dossier(response_payload) if db else ""
+        if dossier_id:
+            response_payload["dossier_id"] = dossier_id
+
+        return response_payload
     except Exception as e:
         print(f"[V2] Pipeline error: {e}")
         return {"status": "error", "message": str(e), "timings": timings}
+
+
+@app.get("/api/report/{report_id}")
+async def get_report(report_id: str):
+    if not db:
+        return {"status": "error", "message": "Database not initialized"}
+    report_json = db.get_dossier_by_id(report_id)
+    if report_json:
+        return report_json
+    return {"status": "error", "message": "Report not found or expired"}
 
 
 @app.post("/webhook")

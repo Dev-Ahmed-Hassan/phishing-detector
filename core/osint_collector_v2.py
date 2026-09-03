@@ -103,6 +103,15 @@ class OSINTCollectorV2:
             official_presence_searches = presence_data.get("official_presence_searches", [])
             official_site_candidates = presence_data.get("official_site_candidates", [])
 
+        # Non-blocking Community Threat Database Lookup
+        community_db_matches = []
+        try:
+            from core.database import Database
+            db_inst = Database()
+            community_db_matches = db_inst.search_threat_index(phones=phones, emails=emails, domains=urls)
+        except Exception as db_err:
+            print(f"OSINT Collector Threat DB Lookup Notice: {db_err}")
+
         return {
           "target_entity_name": org_name,
           "url_verifications": url_verifications,
@@ -111,7 +120,8 @@ class OSINTCollectorV2:
           "community_scam_searches": community_scam_searches,
           "claim_verifications": claim_verifications,
           "phone_number_searches": phone_number_searches,
-          "email_domain_intelligence": email_domain_intelligence
+          "email_domain_intelligence": email_domain_intelligence,
+          "community_db_matches": community_db_matches
         }
 
     # ==========================================================================
