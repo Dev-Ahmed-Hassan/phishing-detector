@@ -300,3 +300,89 @@ class Database:
         except Exception as e:
             print(f"Supabase Notice (save_evidence_cache): {e}")
 
+    def submit_community_report(self, report_data: dict) -> dict:
+        """Saves a public scam report into community_scam_reports with status 'pending_review'."""
+        if not self.client or not report_data:
+            return {"status": "error", "message": "Database client unavailable"}
+        try:
+            record = {
+                "org_name": str(report_data.get("org_name", "")).strip(),
+                "scam_channel": str(report_data.get("scam_channel", "")).strip(),
+                "proof_text": str(report_data.get("proof_text", "")).strip(),
+                "proof_image": report_data.get("proof_image") or None,
+                "reporter_contact": str(report_data.get("reporter_contact", "")).strip(),
+                "status": "pending_review"
+            }
+            res = self.client.table("community_scam_reports").insert(record).execute()
+            return {"status": "success", "data": res.data}
+        except Exception as e:
+            print(f"Supabase Error (submit_community_report): {e}")
+            return {"status": "error", "message": str(e)}
+
+    def get_pending_community_reports(self) -> list:
+        """Fetch all public scam reports with status 'pending_review'."""
+        if not self.client:
+            return []
+        try:
+            res = self.client.table("community_scam_reports").select("*").eq("status", "pending_review").order("created_at", desc=True).execute()
+            return res.data or []
+        except Exception as e:
+            print(f"Supabase Error (get_pending_community_reports): {e}")
+            return []
+
+    def verify_community_report(self, report_id: int, action: str = "approve") -> dict:
+        """Approve or reject a community report. If approved, indexes entities into entity_threat_index."""
+        if not self.client:
+            return {"status": "error", "message": "Database client unavailable"}
+        try:
+            if action == "reject":
+                self.client.table("community_scam_reports").update({"status": "rejected"}).eq("id", report_id).execute()
+                return {"status": "success", "action": "rejected"}
+
+            # Approve action
+            rep = self.client.table("community_scam_reports").select("*").eq("id", report_id).execute()
+            if not rep.data:
+                return {"status": "error", "message": "Report not found"}
+
+            item = rep.data[0]
+            org_name = item.get("org_name")
+            scam_channel = item.get("scam_channel")
+            proof_text = item.get("proof_text")
+
+            # Update status to verified_scam
+            self.client.table("community_scam_reports").update({"status": "verified_scam"}).eq("id", report_id).execute()
+
+            # Insert target org into entity_threat_index
+            if org_name:
+                clean_org = org_name.strip().lower()
+                existing = self.client.table("entity_threat_index").select("id").eq("entity_type", "organization").eq("entity_value", clean_org).execute()
+                if not existing.data:
+                    self.client.table("entity_threat_index").insert({
+                        "dossier_id": f"community_report_{report_id}",
+                        "entity_type": "organization",
+                        "entity_value": clean_org,
+                        "risk_level": "likely_scam",
+                        "evidence_summary": f"Community verified scam report: {proof_text[:200]}"
+                    }).execute()
+
+            # If scam channel contains a phone number, index it too!
+            if scam_channel:
+                import re
+                phones = re.findall(r"(?:\+92[-\s]?3\d{2}|03\d{2})[-\s]?\d{7}\b", scam_channel)
+                for ph in phones:
+                    clean_ph = re.sub(r"[^\d+]", "", ph)
+                    ex = self.client.table("entity_threat_index").select("id").eq("entity_type", "phone").eq("entity_value", clean_ph).execute()
+                    if not ex.data:
+                        self.client.table("entity_threat_index").insert({
+                            "dossier_id": f"community_report_{report_id}",
+                            "entity_type": "phone",
+                            "entity_value": clean_ph,
+                            "risk_level": "likely_scam",
+                            "evidence_summary": f"Reported scam phone channel for {org_name}"
+                        }).execute()
+
+            return {"status": "success", "action": "approved"}
+        except Exception as e:
+            print(f"Supabase Error (verify_community_report): {e}")
+            return {"status": "error", "message": str(e)}
+
