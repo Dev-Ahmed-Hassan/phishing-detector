@@ -205,13 +205,21 @@ class Database:
             print(f"Supabase Error (get_dossier_by_id): {e}")
             return None
 
-    def search_threat_index(self, phones: list = None, emails: list = None, domains: list = None) -> list:
-        """Queries entity_threat_index for previously reported scam contact entities."""
+    def search_threat_index(self, org_name: str = None, phones: list = None, emails: list = None, domains: list = None) -> list:
+        """Queries entity_threat_index for previously reported scam contact entities and organization names."""
         if not self.client:
             return []
 
         results = []
         try:
+            # Query organization name
+            if org_name:
+                clean_org = str(org_name).strip().lower()
+                if clean_org and clean_org != "unknown entity":
+                    res = self.client.table("entity_threat_index").select("*").eq("entity_type", "organization").eq("entity_value", clean_org).limit(3).execute()
+                    if res.data:
+                        results.extend(res.data)
+
             # Query phones
             if phones:
                 for ph in phones:

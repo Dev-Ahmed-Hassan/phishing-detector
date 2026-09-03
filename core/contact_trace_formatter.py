@@ -17,11 +17,36 @@ class ContactTraceFormatter:
     @staticmethod
     def format(dossier: Dict[str, Any]) -> List[Dict[str, Any]]:
         traces: List[Dict[str, Any]] = []
+        for db_match in dossier.get("community_db_matches", []):
+            traces.append(ContactTraceFormatter._format_db_match(db_match))
         for phone_search in dossier.get("phone_number_searches", []):
             traces.append(ContactTraceFormatter._format_phone(phone_search))
         for email_intel in dossier.get("email_domain_intelligence", []):
             traces.append(ContactTraceFormatter._format_email(email_intel))
         return traces
+
+    @staticmethod
+    def _format_db_match(db_match: Dict[str, Any]) -> Dict[str, Any]:
+        dossier_id = db_match.get("dossier_id", "")
+        entity_type = db_match.get("entity_type", "organization")
+        entity_val = db_match.get("entity_value", "")
+        risk_lvl = db_match.get("risk_level", "likely_scam")
+        evidence = db_match.get("evidence_summary", "Community Threat Database Flag")
+
+        return {
+            "type": "database_match",
+            "value": entity_val.upper() if entity_type == "organization" else entity_val,
+            "entity_type": entity_type,
+            "search_status": "ok",
+            "risk_signal": "flagged",
+            "findings": [
+                {
+                    "source_url": f"https://naukrinigran.vercel.app/report/{dossier_id}" if dossier_id else "",
+                    "source_title": f"Naukri Nigran Community Threat Database ({risk_lvl.upper()})",
+                    "snippet": evidence,
+                }
+            ],
+        }
 
     @staticmethod
     def _normalize_phone(raw: str) -> str:

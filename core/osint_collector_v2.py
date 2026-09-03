@@ -108,7 +108,7 @@ class OSINTCollectorV2:
         try:
             from core.database import Database
             db_inst = Database()
-            community_db_matches = db_inst.search_threat_index(phones=phones, emails=emails, domains=urls)
+            community_db_matches = db_inst.search_threat_index(org_name=org_name, phones=phones, emails=emails, domains=urls)
         except Exception as db_err:
             print(f"OSINT Collector Threat DB Lookup Notice: {db_err}")
 
