@@ -7,8 +7,5 @@ supabase
 python-multipart
 beautifulsoup4
 python-whois
-<<<<<<< Updated upstream
-ddgs
-=======
 duckduckgo-search
->>>>>>> Stashed changes
+python-dotenv
