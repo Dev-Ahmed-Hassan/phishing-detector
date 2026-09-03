@@ -113,8 +113,8 @@ class Database:
             }
             self.client.table("dossiers").insert(dossier_record).execute()
 
-            # ONLY index contact entities IF verdict is high_risk or suspicious (Prevents false positive clean numbers!)
-            if verdict in ["high_risk", "suspicious"]:
+            # ONLY index contact entities IF verdict is high_risk, likely_scam, or suspicious
+            if verdict in ["high_risk", "likely_scam", "suspicious"]:
                 extracted = report_data.get("extracted_entities") or {}
                 phones = extracted.get("phones") or []
                 emails = extracted.get("emails") or []
@@ -123,6 +123,16 @@ class Database:
                 takeaway = (exec_summary.get("one_sentence_takeaway") or {}).get("en") or exec_summary.get("primary_threat_vector") or "Flagged in OSINT analysis"
 
                 indexed_rows = []
+
+                # Index organization name
+                if target_entity and target_entity != "Unknown Entity":
+                    indexed_rows.append({
+                        "dossier_id": dossier_id,
+                        "entity_type": "organization",
+                        "entity_value": target_entity.strip().lower(),
+                        "risk_level": verdict,
+                        "evidence_summary": f"Flagged organization ({target_entity}): {takeaway[:150]}"
+                    })
 
                 # Index phones (normalize digits)
                 for ph in phones:
@@ -159,7 +169,7 @@ class Database:
                             "entity_type": "domain",
                             "entity_value": domain,
                             "risk_level": verdict,
-                            "evidence_summary": f"Domain domain used by {target_entity}: {takeaway[:150]}"
+                            "evidence_summary": f"Domain used by {target_entity}: {takeaway[:150]}"
                         })
 
                 # Batch insert threat index rows if any exist
