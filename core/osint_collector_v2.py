@@ -93,6 +93,9 @@ class OSINTCollectorV2:
             # Task 6: Email Domain WHOIS
             future_email_domains = executor.submit(self._analyze_email_domains, emails) if emails else None
 
+            # Task 7: Non-blocking Community Threat Database Lookup (Parallel)
+            future_db = executor.submit(self._search_db_threat_index, org_name, phones, emails, urls)
+
             # Wait for results
             url_verifications = future_urls.result() if future_urls else []
             presence_data = future_presence.result() if future_presence else {}
@@ -100,18 +103,10 @@ class OSINTCollectorV2:
             claim_verifications = future_claims.result() if future_claims else []
             phone_number_searches = future_phones.result() if future_phones else []
             email_domain_intelligence = future_email_domains.result() if future_email_domains else []
+            community_db_matches = future_db.result() if future_db else []
 
             official_presence_searches = presence_data.get("official_presence_searches", [])
             official_site_candidates = presence_data.get("official_site_candidates", [])
-
-        # Non-blocking Community Threat Database Lookup
-        community_db_matches = []
-        try:
-            from core.database import Database
-            db_inst = Database()
-            community_db_matches = db_inst.search_threat_index(org_name=org_name, phones=phones, emails=emails, domains=urls)
-        except Exception as db_err:
-            print(f"OSINT Collector Threat DB Lookup Notice: {db_err}")
 
         return {
           "target_entity_name": org_name,
@@ -481,6 +476,16 @@ class OSINTCollectorV2:
         if raw_results is None:
             return [], "failed"
         return self._format_search_results(raw_results), ("ok" if raw_results else "no_results")
+
+    def _search_db_threat_index(self, org_name: str, phones: list, emails: list, domains: list) -> List[Dict[str, Any]]:
+        """Non-blocking parallel database threat lookup."""
+        try:
+            from core.database import Database
+            db_inst = Database()
+            return db_inst.search_threat_index(org_name=org_name, phones=phones, emails=emails, domains=domains) or []
+        except Exception as db_err:
+            print(f"OSINT Collector Threat DB Lookup Notice: {db_err}")
+            return []
 
     def _try_ddgs_backend(self, query: str, max_results: int, backend: str) -> Optional[List[Dict[str, Any]]]:
         for attempt in range(2):
