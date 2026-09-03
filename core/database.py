@@ -83,7 +83,7 @@ class Database:
             print(f"Supabase Error (get_conversation_history): {e}")
             return ""
 
-    def save_dossier(self, report_data: dict) -> str:
+    def save_dossier(self, report_data: dict, custom_id: str = None) -> str:
         """Saves a complete dossier report to Supabase and indexes high-risk contact entities."""
         if not self.client or not report_data:
             return ""
@@ -92,7 +92,7 @@ class Database:
             import secrets
             import re
 
-            dossier_id = f"rep_{secrets.token_hex(6)}"
+            dossier_id = custom_id or f"rep_{secrets.token_hex(6)}"
 
             # Extract top-level report metadata
             report_body = report_data.get("report") or {}
@@ -251,4 +251,52 @@ class Database:
         except Exception as e:
             print(f"Supabase Error (search_threat_index): {e}")
             return []
+
+    def get_cached_evidence(self, entity_name: str, limit: int = 5) -> list:
+        """
+        Fetch cached evidence links for an entity ordered by recency.
+        """
+        if not self.client or not entity_name:
+            return []
+        try:
+            clean_org = str(entity_name).strip().lower()
+            res = self.client.table("scraped_evidence_cache") \
+                .select("*") \
+                .eq("entity_name", clean_org) \
+                .order("created_at", desc=True) \
+                .limit(limit) \
+                .execute()
+            return res.data or []
+        except Exception as e:
+            print(f"Supabase Notice (get_cached_evidence): {e}")
+            return []
+
+    def save_evidence_cache(self, entity_name: str, verified_items: list) -> None:
+        """
+        Save/upsert Gemini-verified links and scraped snippets into scraped_evidence_cache.
+        """
+        if not self.client or not entity_name or not verified_items:
+            return
+        try:
+            clean_org = str(entity_name).strip().lower()
+            for item in verified_items:
+                url = item.get("url") or item.get("source_url")
+                if not url or not url.startswith("http"):
+                    continue
+                
+                record = {
+                    "entity_name": clean_org,
+                    "url": url,
+                    "title": item.get("title") or item.get("source_title") or "Verified OSINT Evidence",
+                    "snippet": item.get("snippet") or item.get("snippet_quote") or "",
+                    "category": item.get("category", "community_scam"),
+                    "source_type": item.get("source_type", "web"),
+                }
+                
+                # Check if URL already exists to prevent duplicate key errors
+                existing = self.client.table("scraped_evidence_cache").select("id").eq("url", url).execute()
+                if not existing.data:
+                    self.client.table("scraped_evidence_cache").insert(record).execute()
+        except Exception as e:
+            print(f"Supabase Notice (save_evidence_cache): {e}")
 

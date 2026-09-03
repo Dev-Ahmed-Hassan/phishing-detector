@@ -96,6 +96,9 @@ class OSINTCollectorV2:
             # Task 7: Non-blocking Community Threat Database Lookup (Parallel)
             future_db = executor.submit(self._search_db_threat_index, org_name, phones, emails, urls)
 
+            # Task 8: Non-blocking Evidence Cache Retrieval (Parallel)
+            future_cache = executor.submit(self._fetch_cached_evidence, org_name) if org_name else None
+
             # Wait for results
             url_verifications = future_urls.result() if future_urls else []
             presence_data = future_presence.result() if future_presence else {}
@@ -104,9 +107,41 @@ class OSINTCollectorV2:
             phone_number_searches = future_phones.result() if future_phones else []
             email_domain_intelligence = future_email_domains.result() if future_email_domains else []
             community_db_matches = future_db.result() if future_db else []
+            cached_evidence = future_cache.result() if future_cache else []
 
             official_presence_searches = presence_data.get("official_presence_searches", [])
             official_site_candidates = presence_data.get("official_site_candidates", [])
+
+        # Integrate Cached Evidence & Deduplicate against Live Search Results
+        if cached_evidence:
+            live_urls = set()
+            for s in community_scam_searches:
+                for r in s.get("results", []):
+                    if r.get("url"):
+                        live_urls.add(r["url"])
+
+            bonus_cached_results = []
+            for c in cached_evidence:
+                c_url = c.get("url")
+                if not c_url:
+                    continue
+                if c_url not in live_urls:
+                    bonus_cached_results.append({
+                        "title": c.get("title") or "Verified Community Evidence",
+                        "url": c_url,
+                        "snippet": c.get("snippet") or "Historical evidence report.",
+                        "full_page_content": c.get("snippet") or ""
+                    })
+
+            if bonus_cached_results:
+                community_scam_searches.append({
+                    "search_type": "Historical Community Evidence Vault",
+                    "intent": f"Verified historical community reports and evidence for '{org_name}' from database cache",
+                    "target_entity": org_name,
+                    "query_used": f"cached_evidence:{org_name.lower() if org_name else ''}",
+                    "search_status": "ok",
+                    "results": bonus_cached_results[:3]
+                })
 
         return {
           "target_entity_name": org_name,
@@ -485,6 +520,16 @@ class OSINTCollectorV2:
             return db_inst.search_threat_index(org_name=org_name, phones=phones, emails=emails, domains=domains) or []
         except Exception as db_err:
             print(f"OSINT Collector Threat DB Lookup Notice: {db_err}")
+            return []
+
+    def _fetch_cached_evidence(self, org_name: str) -> List[Dict[str, Any]]:
+        """Non-blocking parallel evidence cache lookup."""
+        try:
+            from core.database import Database
+            db_inst = Database()
+            return db_inst.get_cached_evidence(entity_name=org_name, limit=5) or []
+        except Exception as cache_err:
+            print(f"OSINT Collector Evidence Cache Notice: {cache_err}")
             return []
 
     def _try_ddgs_backend(self, query: str, max_results: int, backend: str) -> Optional[List[Dict[str, Any]]]:
