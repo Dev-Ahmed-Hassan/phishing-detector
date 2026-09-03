@@ -89,6 +89,15 @@ async def verify_report(payload: dict):
 def read_root():
     return {"message": "FastAPI WhatsApp Webhook Server is running (Modular V2)!"}
 
+from core.translator_v2 import ReportTranslatorV2
+translator = ReportTranslatorV2()
+
+@app.post("/api/translate-report")
+async def translate_report_endpoint(payload: dict):
+    if not translator:
+        return {"status": "error", "message": "Translator uninitialized"}
+    return translator.translate_report(payload)
+
 @app.post("/api/analyze-web")
 async def analyze_web(
     text: str = Form(default=""),
