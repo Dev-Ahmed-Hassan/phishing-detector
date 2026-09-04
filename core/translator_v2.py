@@ -92,7 +92,7 @@ CRITICAL CONSTRAINTS:
 - Tone must be clear, urgent, and professional.
 """
 
-        models_to_try = [self.model, "gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3.6-flash"]
+        models_to_try = ["gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
         seen_models = set()
         models_to_try = [m for m in models_to_try if not (m in seen_models or seen_models.add(m))]
 
