@@ -21,13 +21,21 @@ class ExtractorV2:
     PHONE_REGEX = re.compile(r'(?:\+92[-\s]?3\d{2}|03\d{2})[-\s]?\d{7}\b')
 
     def __init__(self, api_key: Optional[str] = None):
-        key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY_2") or os.getenv("GEMINI_API_KEY_3") or os.getenv("GEMINI_API")
-        if key:
-            self.client = genai.Client(api_key=key)
+        self.clients = []
+        if api_key:
+            self.clients.append(genai.Client(api_key=api_key))
         else:
-            self.client = None
+            for key_name in ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API"]:
+                key = os.getenv(key_name)
+                if key and genai:
+                    self.clients.append(genai.Client(api_key=key))
             
-        self.model = "gemini-3.5-flash-lite"
+        self.models_to_try = [
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash-lite",
+            "gemini-3.6-flash"
+        ]
 
     def extract_information(
         self, 
@@ -111,7 +119,7 @@ class ExtractorV2:
         media_bytes: Optional[bytes] = None, 
         mime_type: Optional[str] = None
     ) -> Dict[str, Any]:
-        if not self.client:
+        if not self.clients:
             return {"error": "Gemini client not initialized. Check API Key.", "extracted_text": "", "entities": {}, "urls": [], "verifiable_claims": []}
 
         prompt = """
@@ -158,23 +166,29 @@ class ExtractorV2:
         if not contents:
             return {"extracted_text": "", "entities": {}, "urls": [], "verifiable_claims": []}
 
-        try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=prompt,
-                    temperature=0.0,
-                    response_mime_type="application/json"
-                )
-            )
-            raw_content = response.text.strip()
-            if raw_content.startswith("```json"):
-                raw_content = raw_content[7:-3].strip()
-            elif raw_content.startswith("```"):
-                raw_content = raw_content[3:-3].strip()
-                
-            return json.loads(raw_content)
-        except Exception as e:
-            print(f"ExtractorV2 AI Error: {e}")
-            return {"error": str(e), "extracted_text": "", "entities": {}, "urls": [], "verifiable_claims": []}
+        last_error = None
+        for client in self.clients:
+            for model_name in self.models_to_try:
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=prompt,
+                            temperature=0.0,
+                            response_mime_type="application/json"
+                        )
+                    )
+                    raw_content = response.text.strip()
+                    if raw_content.startswith("```json"):
+                        raw_content = raw_content[7:-3].strip()
+                    elif raw_content.startswith("```"):
+                        raw_content = raw_content[3:-3].strip()
+                        
+                    return json.loads(raw_content)
+                except Exception as e:
+                    last_error = e
+                    print(f"ExtractorV2 AI Error ({model_name}): {e}")
+                    continue
+
+        return {"error": str(last_error), "extracted_text": "", "entities": {}, "urls": [], "verifiable_claims": []}

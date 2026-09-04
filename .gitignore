@@ -14,13 +14,9 @@ __pycache__/
 # Leftover Node.js modules (just in case they are still around)
 node_modules/
 
-<<<<<<< Updated upstream
-# Local test scripts & temp files (depend on gitignored fixtures; not for deployment)
+# Local test scripts & temp files
 test_*.py
-=======
-# Local testing and temp files
 test_local.py
->>>>>>> Stashed changes
 *.bak
 .vercel/
 

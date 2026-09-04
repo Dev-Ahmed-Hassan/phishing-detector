@@ -162,25 +162,31 @@ class JudgeV2:
         system_prompt = self._build_system_prompt(user_language, target_entity)
         user_prompt = self._build_user_prompt(dossier, user_language, original_message)
 
+        models_to_try = [self.model, "gemini-3.1-flash-lite", "gemini-2.5-flash-lite", "gemini-3.6-flash"]
+        seen_models = set()
+        models_to_try = [m for m in models_to_try if not (m in seen_models or seen_models.add(m))]
+
         last_error = None
         for attempt in range(max_retries):
             for client in self.clients:
-                try:
-                    raw_json = self._call_model(client, system_prompt, user_prompt)
-                    validated = self._post_process(
-                        raw_json=raw_json,
-                        dossier=dossier,
-                        url_allowlist=url_allowlist,
-                        user_language=user_language,
-                        target_entity=target_entity
-                    )
-                    return validated
-                except Exception as e:
-                    last_error = e
-                    error_message = str(e).lower()
-                    if any(err in error_message for err in ["429", "quota", "rate limit", "503", "unavailable"]):
-                        continue
-                    break
+                for model_name in models_to_try:
+                    try:
+                        raw_json = self._call_model(client, system_prompt, user_prompt, model_name=model_name)
+                        validated = self._post_process(
+                            raw_json=raw_json,
+                            dossier=dossier,
+                            url_allowlist=url_allowlist,
+                            user_language=user_language,
+                            target_entity=target_entity
+                        )
+                        return validated
+                    except Exception as e:
+                        last_error = e
+                        error_message = str(e).lower()
+                        print(f"JudgeV2 AI Error ({model_name}): {e}")
+                        if any(err in error_message for err in ["429", "quota", "rate limit", "503", "unavailable"]):
+                            continue
+                        break
 
         raise RuntimeError(f"JudgeV2 failed after {max_retries} attempts. Last error: {last_error}")
 
@@ -269,9 +275,10 @@ Remember:
     # Model Call
     # ----------------------------------------------------------------------
 
-    def _call_model(self, client, system_prompt: str, user_prompt: str) -> Dict[str, Any]:
+    def _call_model(self, client, system_prompt: str, user_prompt: str, model_name: Optional[str] = None) -> Dict[str, Any]:
+        target_model = model_name or self.model
         response = client.models.generate_content(
-            model=self.model,
+            model=target_model,
             contents=[user_prompt],
             config=types.GenerateContentConfig(
                 system_instruction=system_prompt,

@@ -13,21 +13,29 @@ except ImportError:
 warnings.filterwarnings("ignore", module="duckduckgo_search")
 
 class OSINTSearcher:
-    def __init__(self):
-        # We will attempt to grab any available key
-        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GEMINI_API_KEY_2") or os.getenv("GEMINI_API_KEY_3")
+    def __init__(self, api_key: Optional[str] = None):
+        self.clients = []
         if api_key:
-            self.client = genai.Client(api_key=api_key)
+            self.clients.append(genai.Client(api_key=api_key))
         else:
-            self.client = None
-            
+            for key_name in ["GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API"]:
+                key = os.getenv(key_name)
+                if key and genai:
+                    self.clients.append(genai.Client(api_key=key))
+
         self.model = "gemini-3.5-flash-lite"
+        self.models_to_try = [
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash-lite",
+            "gemini-3.6-flash"
+        ]
 
     def extract_claims(self, text: str) -> dict:
         """
         Agent 1: Extracts Direct and Indirect claims from the text.
         """
-        if not self.client:
+        if not self.clients:
             return {}
             
         prompt = """
@@ -55,25 +63,28 @@ class OSINTSearcher:
         }
         """
         
-        try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=[text],
-                config=types.GenerateContentConfig(
-                    system_instruction=prompt,
-                    temperature=0.0,
-                    response_mime_type="application/json"
-                )
-            )
-            raw_content = response.text.strip()
-            if raw_content.startswith("```json"):
-                raw_content = raw_content[7:-3].strip()
-            elif raw_content.startswith("```"):
-                raw_content = raw_content[3:-3].strip()
-            return json.loads(raw_content)
-        except Exception as e:
-            print(f"OSINT Extraction Error: {e}")
-            return {}
+        for client in self.clients:
+            for model_name in self.models_to_try:
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[text],
+                        config=types.GenerateContentConfig(
+                            system_instruction=prompt,
+                            temperature=0.0,
+                            response_mime_type="application/json"
+                        )
+                    )
+                    raw_content = response.text.strip()
+                    if raw_content.startswith("```json"):
+                        raw_content = raw_content[7:-3].strip()
+                    elif raw_content.startswith("```"):
+                        raw_content = raw_content[3:-3].strip()
+                    return json.loads(raw_content)
+                except Exception as e:
+                    print(f"OSINT Extraction Error ({model_name}): {e}")
+                    continue
+        return {}
 
     def search_web(self, query: str) -> str:
         """
@@ -144,25 +155,28 @@ class OSINTSearcher:
         
         content = f"ORIGINAL MESSAGE:\n{original_text}\n\nCLAIMS:\n{json.dumps(claims_dict)}\n\nWEB SEARCH RESULTS:\n{search_results}"
         
-        try:
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=[content],
-                config=types.GenerateContentConfig(
-                    system_instruction=prompt,
-                    temperature=0.2,
-                    response_mime_type="application/json"
-                )
-            )
-            raw_content = response.text.strip()
-            if raw_content.startswith("```json"):
-                raw_content = raw_content[7:-3].strip()
-            elif raw_content.startswith("```"):
-                raw_content = raw_content[3:-3].strip()
-            return json.loads(raw_content)
-        except Exception as e:
-            print(f"OSINT Judgment Error: {e}")
-            return ""
+        for client in self.clients:
+            for model_name in self.models_to_try:
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=[content],
+                        config=types.GenerateContentConfig(
+                            system_instruction=prompt,
+                            temperature=0.2,
+                            response_mime_type="application/json"
+                        )
+                    )
+                    raw_content = response.text.strip()
+                    if raw_content.startswith("```json"):
+                        raw_content = raw_content[7:-3].strip()
+                    elif raw_content.startswith("```"):
+                        raw_content = raw_content[3:-3].strip()
+                    return json.loads(raw_content)
+                except Exception as e:
+                    print(f"OSINT Judgment Error ({model_name}): {e}")
+                    continue
+        return ""
 
     def generate_osint_report(self, text: str) -> str:
         """

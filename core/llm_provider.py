@@ -36,6 +36,12 @@ class GeminiLLMProvider(LLMProvider):
     def __init__(self, api_key: str):
         self.client = genai.Client(api_key=api_key)
         self.model = "gemini-3.5-flash-lite" 
+        self.models_to_try = [
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
+            "gemini-2.5-flash-lite",
+            "gemini-3.6-flash"
+        ]
 
         self.system_instruction = """
         You are an expert scam and phishing detector specializing in Pakistani job scams.
@@ -107,32 +113,41 @@ class GeminiLLMProvider(LLMProvider):
                 types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
             )
 
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=self.system_instruction,
-                temperature=0.2,
-                response_mime_type="application/json"
-            )
-        )
-        
-        raw_content = response.text.strip()
-        if raw_content.startswith("```json"):
-            raw_content = raw_content[7:-3].strip()
-        elif raw_content.startswith("```"):
-            raw_content = raw_content[3:-3].strip()
-            
-        data = json.loads(raw_content)
-        
-        return ModularReport(
-            risk_level=data.get("risk_level", "Medium"),
-            detected_language=data.get("detected_language", "English"),
-            specific_analysis=data.get("specific_analysis", "Could not fully parse reasoning."),
-            recommended_action=data.get("recommended_action", "Be careful and verify the source."),
-            database_findings=None,
-            web_search_findings=None
-        )
+        last_error = None
+        for model_name in self.models_to_try:
+            try:
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self.system_instruction,
+                        temperature=0.2,
+                        response_mime_type="application/json"
+                    )
+                )
+                
+                raw_content = response.text.strip()
+                if raw_content.startswith("```json"):
+                    raw_content = raw_content[7:-3].strip()
+                elif raw_content.startswith("```"):
+                    raw_content = raw_content[3:-3].strip()
+                    
+                data = json.loads(raw_content)
+                
+                return ModularReport(
+                    risk_level=data.get("risk_level", "Medium"),
+                    detected_language=data.get("detected_language", "English"),
+                    specific_analysis=data.get("specific_analysis", "Could not fully parse reasoning."),
+                    recommended_action=data.get("recommended_action", "Be careful and verify the source."),
+                    database_findings=None,
+                    web_search_findings=None
+                )
+            except Exception as e:
+                last_error = e
+                print(f"GeminiLLMProvider Error ({model_name}): {e}")
+                continue
+
+        raise last_error or RuntimeError("GeminiLLMProvider failed for all models")
 
     def analyze_web(self, text: str, media_bytes: bytes = None, mime_type: str = None) -> WebModularReport:
         contents = [text]
@@ -141,36 +156,45 @@ class GeminiLLMProvider(LLMProvider):
                 types.Part.from_bytes(data=media_bytes, mime_type=mime_type)
             )
 
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=self.system_instruction_web,
-                temperature=0.0, # Deterministic setting
-                response_mime_type="application/json"
-            )
-        )
-        
-        raw_content = response.text.strip()
-        if raw_content.startswith("```json"):
-            raw_content = raw_content[7:-3].strip()
-        elif raw_content.startswith("```"):
-            raw_content = raw_content[3:-3].strip()
-            
-        data = json.loads(raw_content)
-        
-        return WebModularReport(
-            risk_level=data.get("risk_level", "Medium"),
-            confidence_score=data.get("confidence_score", 50),
-            detected_language=data.get("detected_language", "English"),
-            specific_analysis=data.get("specific_analysis", "Could not fully parse reasoning."),
-            recommended_action=data.get("recommended_action", "Be careful and verify the source."),
-            threat_vectors=data.get("threat_vectors", []),
-            detected_urls=data.get("detected_urls", []),
-            digital_footprint=data.get("digital_footprint", "No digital footprint information provided."),
-            investigation_log=data.get("investigation_log", ["Performed basic heuristic analysis."]),
-            sources=data.get("sources", [])
-        )
+        last_error = None
+        for model_name in self.models_to_try:
+            try:
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=self.system_instruction_web,
+                        temperature=0.0, # Deterministic setting
+                        response_mime_type="application/json"
+                    )
+                )
+                
+                raw_content = response.text.strip()
+                if raw_content.startswith("```json"):
+                    raw_content = raw_content[7:-3].strip()
+                elif raw_content.startswith("```"):
+                    raw_content = raw_content[3:-3].strip()
+                    
+                data = json.loads(raw_content)
+                
+                return WebModularReport(
+                    risk_level=data.get("risk_level", "Medium"),
+                    confidence_score=data.get("confidence_score", 50),
+                    detected_language=data.get("detected_language", "English"),
+                    specific_analysis=data.get("specific_analysis", "Could not fully parse reasoning."),
+                    recommended_action=data.get("recommended_action", "Be careful and verify the source."),
+                    threat_vectors=data.get("threat_vectors", []),
+                    detected_urls=data.get("detected_urls", []),
+                    digital_footprint=data.get("digital_footprint", "No digital footprint information provided."),
+                    investigation_log=data.get("investigation_log", ["Performed basic heuristic analysis."]),
+                    sources=data.get("sources", [])
+                )
+            except Exception as e:
+                last_error = e
+                print(f"GeminiLLMProvider Web Error ({model_name}): {e}")
+                continue
+
+        raise last_error or RuntimeError("GeminiLLMProvider analyze_web failed for all models")
 
 
 class OrchestratorLLMProvider(LLMProvider):
