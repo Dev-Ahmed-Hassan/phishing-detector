@@ -545,6 +545,29 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         if api_key:
             headers["X-API-Key"] = api_key
 
+        # PRODUCTION TEST CHECK: If message is exactly "test-text", bypass AI pipeline completely
+        if text.strip().lower() == "test-text":
+            test_reply = (
+                f"🤖 *[ScamLess Production Test Check]*\n\n"
+                f"✅ Instant Recognition Successful!\n"
+                f"• *Sender*: `{chat_id}`\n"
+                f"• *Status*: OpenWA Webhook → Vercel Backend → WhatsApp Reply working 100%!\n\n"
+                f"⚡ *(AI Pipeline was bypassed for this test command)*"
+            )
+            send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                try:
+                    resp = await client.post(
+                        send_url,
+                        json={"chatId": chat_id, "text": test_reply},
+                        headers=headers
+                    )
+                    print(f"Sent production test-text reply ({resp.status_code}): {resp.text}")
+                    return {"status": "success", "mode": "production_test_check", "chatId": chat_id}
+                except Exception as e:
+                    print("Error sending test-text reply:", str(e))
+                    return {"status": "error", "message": str(e)}
+
         # Send instant receipt acknowledgement to WhatsApp user
         ack_text = (
             "🔍 *ScamLess AI Analysis Initiated...*\n\n"
