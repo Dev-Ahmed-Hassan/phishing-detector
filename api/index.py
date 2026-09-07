@@ -96,6 +96,74 @@ def read_root():
 from core.translator_v2 import ReportTranslatorV2
 translator = ReportTranslatorV2()
 
+@app.post("/api/openwa-test-webhook")
+async def openwa_test_webhook(request: Request):
+    """
+    Test endpoint for OpenWA WhatsApp Webhook.
+    Intercepts incoming text, images, and audio without triggering the heavy AI pipeline,
+    and sends an instant echo reply back to the sender's WhatsApp number.
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        return {"status": "error", "message": "Invalid JSON"}
+
+    print("--- OpenWA Webhook Intercepted ---")
+    print(json.dumps(data, indent=2)[:500])
+
+    msg_data = data.get("payload") or data.get("data") or data
+    if isinstance(msg_data, str):
+        return {"status": "ok"}
+
+    from_me = msg_data.get("fromMe", False)
+    if from_me:
+        return {"status": "ignored", "reason": "Self message"}
+
+    chat_id = msg_data.get("from") or msg_data.get("chatId")
+    if not chat_id:
+        return {"status": "ignored", "reason": "No sender chatId found"}
+
+    text = msg_data.get("body", "")
+    msg_type = msg_data.get("type", "chat")
+    has_media = msg_data.get("hasMedia", False)
+    session_id = data.get("sessionId") or os.getenv("OPENWA_SESSION_ID", "default")
+
+    media_note = " 📷 Image attached" if msg_type == "image" or has_media else ""
+    if msg_type == "audio":
+        media_note = " 🎤 Audio voice note attached"
+
+    reply_text = (
+        f"🤖 *[ScamLess Gateway Test Mode]*\n\n"
+        f"✅ Received your WhatsApp message!\n"
+        f"• *Sender*: `{chat_id}`\n"
+        f"• *Type*: {msg_type}{media_note}\n"
+        f"• *Text*: \"{text[:200] if text else '(No text caption)'}\"\n\n"
+        f"⚡ *Status*: Webhook & Auto-Reply pipeline working 100% end-to-end!"
+    )
+
+    openwa_base = os.getenv("OPENWA_GATEWAY_URL", "https://openwa-production-731b.up.railway.app").rstrip("/")
+    api_key = os.getenv("OPENWA_API_KEY", "")
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            resp = await client.post(
+                send_url,
+                json={"chatId": chat_id, "text": reply_text},
+                headers=headers
+            )
+            print(f"OpenWA Test Reply Sent ({resp.status_code}): {resp.text}")
+            return {"status": "success", "openwa_status": resp.status_code, "chatId": chat_id}
+        except Exception as e:
+            print("Error calling OpenWA send-text:", str(e))
+            return {"status": "error", "message": str(e)}
+
+
 @app.post("/api/translate-report")
 async def translate_report_endpoint(payload: dict):
     if not translator:
@@ -327,17 +395,210 @@ async def get_report(report_id: str):
     return {"status": "error", "message": "Report not found or expired"}
 
 
+async def _process_openwa_full_v2_and_reply(
+    chat_id: str,
+    text: str,
+    msg_type: str,
+    has_media: bool,
+    message_id: Optional[str],
+    session_id: str
+):
+    """
+    Asynchronous Full V2 Pipeline Worker:
+    1. Downloads image/audio binary from OpenWA if media is present.
+    2. Runs ExtractorV2 (OCR + Audio Transcription + Regex).
+    3. Runs OSINTCollectorV2 (Web Search + WHOIS + Supabase Database).
+    4. Runs JudgeV2 (Deterministic Scoring + Multi-model LLM Verdict).
+    5. Formats & sends the WhatsApp verdict report to the sender's phone number.
+    """
+    openwa_base = os.getenv("OPENWA_GATEWAY_URL", "https://openwa-production-731b.up.railway.app").rstrip("/")
+    api_key = os.getenv("OPENWA_API_KEY", "")
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    media_bytes = None
+    mime_type = None
+
+    # Fetch media bytes from OpenWA if message contains image or audio voice note
+    if (has_media or msg_type in ["image", "audio", "ptt", "document"]) and message_id:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            try:
+                media_url = f"{openwa_base}/api/sessions/{session_id}/messages/{message_id}/media"
+                resp = await client.get(media_url, headers=headers)
+                if resp.status_code == 200:
+                    media_bytes = resp.content
+                    mime_type = resp.headers.get("content-type", "image/jpeg" if msg_type == "image" else "audio/ogg")
+                    print(f"[OpenWA] Downloaded media bytes ({len(media_bytes)} bytes, mime={mime_type})")
+            except Exception as e:
+                print(f"[OpenWA] Error fetching media for {message_id}: {e}")
+
+    try:
+        # Phase 1: ExtractorV2 (OCR, Audio, Text)
+        extraction = ExtractorV2().extract_information(
+            text=text, media_bytes=media_bytes, mime_type=mime_type
+        )
+        master = extraction.get("consolidated_master_result", {})
+        has_entities = any([
+            master.get("organization_name"),
+            master.get("all_unique_urls"),
+            master.get("all_unique_emails"),
+            master.get("all_unique_phones"),
+            master.get("unique_verifiable_claims")
+        ])
+
+        if not has_entities:
+            reply_text = (
+                "ℹ️ *SCAMLESS ANALYSIS REPORT*\n\n"
+                "No verifiable company names, website URLs, contact emails, or phone numbers were detected in your input.\n\n"
+                "💡 *Tip*: Send an offer letter, recruiter text, job flyer image, or audio note containing company contact details to perform a full OSINT investigation!"
+            )
+        else:
+            # Phase 2: OSINTCollectorV2
+            dossier = OSINTCollectorV2().collect_evidence(extraction)
+            # Phase 3: JudgeV2
+            report = JudgeV2().judge(dossier, original_message=text)
+
+            exec_sum = report.get("executive_summary", {})
+            verdict = exec_sum.get("verdict", "inconclusive").lower()
+            conf = exec_sum.get("confidence_score", 50)
+            takeaway = exec_sum.get("one_sentence_takeaway", {}).get("user_language") or exec_sum.get("one_sentence_takeaway", {}).get("en") or ""
+
+            user_report = report.get("user_facing_report", {})
+            title = user_report.get("title", "Forensic Investigation Report")
+            summary = user_report.get("summary_paragraph", "")
+            actions = user_report.get("what_you_should_do", [])
+
+            verdict_emoji = "🚨" if verdict == "likely_scam" else ("⚠️" if verdict == "suspicious" else "✅")
+            verdict_title = "HIGH RISK SCAM" if verdict == "likely_scam" else ("SUSPICIOUS / UNVERIFIED" if verdict == "suspicious" else "LIKELY LEGITIMATE")
+
+            actions_str = "\n".join([f"• {a}" for a in actions[:3]]) if actions else "• Verify company credentials before making any payments."
+
+            reply_text = (
+                f"{verdict_emoji} *SCAMLESS FORENSIC REPORT*\n"
+                f"━━━━━━━━━━━━━━━━━━━━━\n"
+                f"*VERDICT*: {verdict_title}\n"
+                f"*TRUST SCORE*: {conf}/100\n\n"
+                f"*SUMMARY*:\n{summary if summary else takeaway}\n\n"
+                f"📋 *RECOMMENDED ACTIONS*:\n{actions_str}\n\n"
+                f"🛡️ *ScamLess AI Forensic Engine*"
+            )
+
+    except Exception as err:
+        print(f"[OpenWA V2 Pipeline Error]: {err}")
+        reply_text = "⚠️ *Analysis Error*: Could not complete OSINT verification. Please try re-sending the message or flyer."
+
+    # Post final report to OpenWA
+    send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        try:
+            await client.post(
+                send_url,
+                json={"chatId": chat_id, "text": reply_text},
+                headers=headers
+            )
+            print(f"[OpenWA] Final V2 report sent successfully to {chat_id}")
+        except Exception as e:
+            print(f"[OpenWA] Failed to send final report to {chat_id}: {e}")
+
+
 @app.post("/webhook")
-async def webhook(request: Request):
+@app.post("/api/webhook")
+async def webhook(request: Request, background_tasks: BackgroundTasks):
+    """
+    Main Webhook endpoint supporting OpenWA (and fallback legacy integrations).
+    Handles text, images, and audio voice notes end-to-end.
+    """
     try:
         body = await request.json()
     except Exception:
         return {"status": "error", "message": "Invalid JSON"}
 
     print("--- Incoming Webhook Event ---")
-    print(json.dumps(body, indent=2))
-    
-    # We always use the anonymous ID for tracking the session
+    print(json.dumps(body, indent=2)[:500])
+
+    is_openwa = ("sessionId" in body) or ("event" in body) or ("payload" in body and isinstance(body["payload"], dict) and "from" in body["payload"])
+
+    if is_openwa:
+        msg_data = body.get("payload") or body.get("data") or body
+        if isinstance(msg_data, str):
+            return {"status": "ok"}
+
+        from_me = msg_data.get("fromMe", False)
+        if from_me:
+            return {"status": "skipped", "reason": "Self message"}
+
+        chat_id = msg_data.get("from") or msg_data.get("chatId")
+        if not chat_id:
+            return {"status": "ignored", "reason": "No sender chatId found"}
+
+        text = msg_data.get("body", "")
+        msg_type = msg_data.get("type", "chat")
+        has_media = msg_data.get("hasMedia", False)
+        message_id = msg_data.get("id") or msg_data.get("_serialized")
+        session_id = body.get("sessionId") or os.getenv("OPENWA_SESSION_ID", "default")
+
+        openwa_base = os.getenv("OPENWA_GATEWAY_URL", "https://openwa-production-731b.up.railway.app").rstrip("/")
+        api_key = os.getenv("OPENWA_API_KEY", "")
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["X-API-Key"] = api_key
+
+        # PRODUCTION TEST CHECK: If message is exactly "test-text", bypass AI pipeline completely
+        if text.strip().lower() == "test-text":
+            test_reply = (
+                f"🤖 *[ScamLess Production Test Check]*\n\n"
+                f"✅ Instant Recognition Successful!\n"
+                f"• *Sender*: `{chat_id}`\n"
+                f"• *Status*: OpenWA Webhook → Vercel Backend → WhatsApp Reply working 100%!\n\n"
+                f"⚡ *(AI Pipeline was bypassed for this test command)*"
+            )
+            send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                try:
+                    resp = await client.post(
+                        send_url,
+                        json={"chatId": chat_id, "text": test_reply},
+                        headers=headers
+                    )
+                    print(f"Sent production test-text reply ({resp.status_code}): {resp.text}")
+                    return {"status": "success", "mode": "production_test_check", "chatId": chat_id}
+                except Exception as e:
+                    print("Error sending test-text reply:", str(e))
+                    return {"status": "error", "message": str(e)}
+
+        # Send instant receipt acknowledgement to WhatsApp user
+        ack_text = (
+            "🔍 *ScamLess AI Analysis Initiated...*\n\n"
+            "We have received your WhatsApp input! Running OCR, transcribing media, and verifying company OSINT footprint. Please wait 15-30 seconds for your full forensic report."
+        )
+
+        send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                await client.post(
+                    send_url,
+                    json={"chatId": chat_id, "text": ack_text},
+                    headers=headers
+                )
+            except Exception as e:
+                print(f"[OpenWA] Error sending initial ack: {e}")
+
+        # Queue full async V2 analysis in background task (prevents webhook timeout)
+        background_tasks.add_task(
+            _process_openwa_full_v2_and_reply,
+            chat_id=chat_id,
+            text=text,
+            msg_type=msg_type,
+            has_media=has_media,
+            message_id=message_id,
+            session_id=session_id
+        )
+
+        return {"status": "success", "session": session_id, "chatId": chat_id}
+
+    # Legacy WireWeb fallback path
     user_id = body.get("sender") or body.get("chat") or "unknown_user"
     message_text = body.get("text") or body.get("message")
         
@@ -347,44 +608,16 @@ async def webhook(request: Request):
     if not message_text:
         return {"status": "ignored", "reason": "No text content"}
 
-    print(f'Processing message from {user_id}: "{message_text}"')
+    print(f'Processing legacy message from {user_id}: "{message_text}"')
+    recipient_phone = body.get("from") or user_id
     
-    # --- ACTIVATION GATEKEEPER LOGIC ---
-    user = db.get_or_create_user(user_id) if db else None
-    
-    is_registered = False
-    recipient_phone = body.get("from") # Default fallback if DB fails
-    
-    if user:
-        recipient_phone = user.get("phone_number")
-        is_registered = bool(recipient_phone)
-        
-    if not is_registered and db:
-        # Check if they are trying to activate
-        if message_text.strip().startswith("ACTIVATE_SCAM_DETECTOR="):
-            real_phone = message_text.split("=")[1].strip()
-            db.register_phone_number(user_id, real_phone)
-            
-            reply_message = "*✅ Success! Your number is now registered.*\n\nPlease re-send any previous scam messages you want me to analyze!"
-            recipient_phone = real_phone
-        else:
-            # Silently log their message and ignore
-            db.save_message(user_id, "user", message_text)
-            print(f"Silently logged message for unregistered user {user_id}")
-            return {"status": "ignored", "reason": "User unregistered. Silently logged."}
-    else:
-        # User IS registered (or DB is disabled)
-        # 1. Run the AI Pipeline with Context
-        assessment = pipeline.process(user_id, message_text)
-        # 2. Format specifically for WhatsApp
-        reply_message = ResponseFormatter.format_whatsapp(assessment)
-    
-    # If we somehow still don't have a recipient, we can't send a message
-    if not recipient_phone:
-        print("Error: No recipient phone number available to send reply.")
-        return {"status": "error", "reason": "No recipient phone number"}
+    assessment = pipeline.process(user_id, message_text)
+    reply_message = ResponseFormatter.format_whatsapp(assessment)
 
-    # Send the reply back to WireWeb using the REAL phone number
+    if not recipient_phone or not WIREWEB_API_KEY:
+        print("Error: No recipient phone or WireWeb key available.")
+        return {"status": "error", "reason": "No recipient phone or WireWeb key"}
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
@@ -399,8 +632,8 @@ async def webhook(request: Request):
                     "Content-Type": "application/json"
                 }
             )
-            print(f"Sent reply to {recipient_phone}:", response.text)
+            print(f"Sent legacy reply to {recipient_phone}:", response.text)
             return {"status": "success"}
         except Exception as e:
-            print("Error sending message:", str(e))
+            print("Error sending legacy message:", str(e))
             return {"status": "error", "message": str(e)}
