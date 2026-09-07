@@ -441,16 +441,19 @@ async def _flush_buffer_and_process_v2(chat_id: str, session_id: str):
     combined_texts = [item["text"].strip() for item in buffer_items if item.get("text") and item["text"].strip()]
     full_text = "\n\n".join(combined_texts)
 
-    # Pick the primary media item (if any photo/audio was attached in the window)
+    # Pick the primary media item (only if real media was attached)
     primary_media_item = None
     for item in buffer_items:
-        if item.get("has_media") or item.get("msg_type") in ["image", "audio", "ptt", "document"]:
+        if item.get("has_media") is True and item.get("msg_type") in ["image", "audio", "ptt", "document"]:
             primary_media_item = item
             break
 
     msg_type = primary_media_item["msg_type"] if primary_media_item else "chat"
     has_media = primary_media_item["has_media"] if primary_media_item else False
     message_id = primary_media_item["message_id"] if primary_media_item else None
+
+    # Retrieve timestamp of the initial message in this batch
+    first_time = buffer_items[0].get("timestamp") or time.strftime("%H:%M:%S")
 
     # Execute full V2 pipeline worker with aggregated inputs
     await _process_openwa_full_v2_and_reply(
@@ -459,7 +462,8 @@ async def _flush_buffer_and_process_v2(chat_id: str, session_id: str):
         msg_type=msg_type,
         has_media=has_media,
         message_id=message_id,
-        session_id=session_id
+        session_id=session_id,
+        received_at=first_time
     )
 
 
@@ -469,7 +473,8 @@ async def _process_openwa_full_v2_and_reply(
     msg_type: str,
     has_media: bool,
     message_id: Optional[str],
-    session_id: str
+    session_id: str,
+    received_at: str = ""
 ):
     """
     Asynchronous Full V2 Pipeline Worker:
@@ -479,6 +484,18 @@ async def _process_openwa_full_v2_and_reply(
     4. Runs JudgeV2 (Deterministic Scoring + Multi-model LLM Verdict in user's input language).
     5. Saves dossier to Supabase and sends an emoji-free verdict report with full web report link.
     """
+    if not received_at:
+        received_at = time.strftime("%H:%M:%S")
+
+    # Create short query preview for clear message tracking in replies
+    clean_snippet = text.strip().replace("\n", " ")
+    if len(clean_snippet) > 35:
+        query_snippet = clean_snippet[:35] + "..."
+    elif clean_snippet:
+        query_snippet = clean_snippet
+    else:
+        query_snippet = "[Photo / Audio Flyer]"
+
     openwa_base = os.getenv("OPENWA_GATEWAY_URL", "https://openwa-production-731b.up.railway.app").rstrip("/")
     api_key = os.getenv("OPENWA_API_KEY", "")
     headers = {"Content-Type": "application/json"}
@@ -488,7 +505,8 @@ async def _process_openwa_full_v2_and_reply(
     media_bytes = None
     mime_type = None
 
-    if (has_media or msg_type in ["image", "audio", "ptt", "document"]) and message_id:
+    # Only attempt media download if actual media attachment is present
+    if has_media and msg_type in ["image", "audio", "ptt", "document"] and message_id:
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
                 media_url = f"{openwa_base}/api/sessions/{session_id}/messages/{message_id}/media"
@@ -514,12 +532,19 @@ async def _process_openwa_full_v2_and_reply(
             master.get("unique_verifiable_claims")
         ])
 
+        # If user typed a company name query (e.g., "Ubexi"), use text input as target organization
+        if not has_entities and text and len(text.strip()) >= 3:
+            master["organization_name"] = text.strip()
+            has_entities = True
+
         if not has_entities:
             reply_text = (
-                "*SCAMLESS ANALYSIS REPORT*\n"
-                "----------------------------------------\n"
-                "No verifiable company names, website URLs, contact emails, or phone numbers were detected in your input.\n\n"
-                "Tip: Send an offer letter, recruiter text, job flyer image, or audio note containing company contact details to perform a full OSINT investigation!"
+                f"*SCAMLESS ANALYSIS REPORT*\n"
+                f"----------------------------------------\n"
+                f"*Original Query*: \"{query_snippet}\"\n"
+                f"*Received At*: {received_at}\n\n"
+                f"No verifiable company names, website URLs, contact emails, or phone numbers were detected in your input.\n\n"
+                f"Tip: Send an offer letter, recruiter text, job flyer image, or audio note containing company contact details to perform a full OSINT investigation!"
             )
         else:
             # Phase 2: OSINTCollectorV2
@@ -540,7 +565,8 @@ async def _process_openwa_full_v2_and_reply(
 
             # Generate permanent dossier ID and save to Supabase DB for web link
             dossier_id = f"rep_{secrets.token_hex(6)}"
-            report_link = f"https://naukrinigran.vercel.app/report/{dossier_id}"
+            web_domain = os.getenv("WEB_APP_URL", "https://scamless.vercel.app").rstrip("/")
+            report_link = f"{web_domain}/report/{dossier_id}"
 
             response_payload = {
                 "status": "success",
@@ -558,6 +584,8 @@ async def _process_openwa_full_v2_and_reply(
             reply_text = (
                 f"*SCAMLESS FORENSIC REPORT*\n"
                 f"----------------------------------------\n"
+                f"*Original Query*: \"{query_snippet}\"\n"
+                f"*Received At*: {received_at}\n"
                 f"*Target Entity*: {target_entity}\n"
                 f"*Verdict*: {verdict}\n"
                 f"*Trust Score*: {conf}/100\n\n"
@@ -568,7 +596,13 @@ async def _process_openwa_full_v2_and_reply(
 
     except Exception as err:
         print(f"[OpenWA V2 Pipeline Error]: {err}")
-        reply_text = "Analysis Error: Could not complete OSINT verification. Please try re-sending the message or flyer."
+        reply_text = (
+            f"*SCAMLESS ANALYSIS REPORT*\n"
+            f"----------------------------------------\n"
+            f"*Original Query*: \"{query_snippet}\"\n"
+            f"*Received At*: {received_at}\n\n"
+            f"Analysis Error: Could not complete OSINT verification. Please try re-sending the message or flyer."
+        )
 
     # Post final report to OpenWA
     send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
@@ -650,6 +684,16 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
                     print("Error sending test-text reply:", str(e))
                     return {"status": "error", "message": str(e)}
 
+        # Format timestamp from message payload or current server time
+        raw_ts = msg_data.get("timestamp") or body.get("timestamp")
+        if isinstance(raw_ts, (int, float)):
+            ts_sec = raw_ts / 1000.0 if raw_ts > 1e11 else float(raw_ts)
+            rec_time_str = time.strftime("%H:%M:%S", time.localtime(ts_sec))
+        elif isinstance(raw_ts, str) and "T" in raw_ts:
+            rec_time_str = raw_ts.split("T")[1].split(".")[0]
+        else:
+            rec_time_str = time.strftime("%H:%M:%S")
+
         # Buffer message for 5-second aggregation window
         if chat_id not in USER_MESSAGE_BUFFERS:
             USER_MESSAGE_BUFFERS[chat_id] = []
@@ -658,7 +702,8 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             "text": text,
             "msg_type": msg_type,
             "has_media": has_media,
-            "message_id": message_id
+            "message_id": message_id,
+            "timestamp": rec_time_str
         })
 
         # Send instant receipt acknowledgement to WhatsApp user ONCE per aggregation window (No Emojis)
