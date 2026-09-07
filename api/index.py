@@ -706,31 +706,35 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             "timestamp": rec_time_str
         })
 
-        # Send instant receipt acknowledgement to WhatsApp user ONCE per aggregation window (No Emojis)
-        if chat_id not in ACKNOWLEDGED_CHATS:
-            ACKNOWLEDGED_CHATS.add(chat_id)
-            ack_text = (
-                "*ScamLess AI Analysis Initiated...*\n\n"
-                "We have received your WhatsApp input. Running OCR, transcribing media, and verifying company OSINT footprint. Please wait 15-30 seconds for your full forensic report."
-            )
-            send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                try:
-                    await client.post(
-                        send_url,
-                        json={"chatId": chat_id, "text": ack_text},
-                        headers=headers
-                    )
-                except Exception as e:
-                    print(f"[OpenWA] Error sending initial ack: {e}")
+        # Send instant receipt acknowledgement to WhatsApp user (No Emojis)
+        ack_text = (
+            "*ScamLess AI Analysis Initiated...*\n\n"
+            "We have received your WhatsApp input. Running OCR, transcribing media, and verifying company OSINT footprint. Please wait 15-30 seconds for your full forensic report."
+        )
+        send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                await client.post(
+                    send_url,
+                    json={"chatId": chat_id, "text": ack_text},
+                    headers=headers
+                )
+            except Exception as e:
+                print(f"[OpenWA] Error sending initial ack: {e}")
 
-        # Start 5-second timer task if not already running for this user
-        if chat_id not in USER_BUFFER_TASKS:
-            USER_BUFFER_TASKS[chat_id] = asyncio.create_task(
-                _flush_buffer_and_process_v2(chat_id, session_id)
-            )
+        # Enqueue full V2 pipeline via FastAPI BackgroundTasks (guarantees execution on Vercel serverless)
+        background_tasks.add_task(
+            _process_openwa_full_v2_and_reply,
+            chat_id=chat_id,
+            text=text,
+            msg_type=msg_type,
+            has_media=has_media,
+            message_id=message_id,
+            session_id=session_id,
+            received_at=rec_time_str
+        )
 
-        return {"status": "buffered", "session": session_id, "chatId": chat_id}
+        return {"status": "queued", "session": session_id, "chatId": chat_id}
 
     # Legacy WireWeb fallback path
     user_id = body.get("sender") or body.get("chat") or "unknown_user"
