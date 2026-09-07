@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, Request, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
@@ -337,7 +337,27 @@ def _background_save(payload: dict, dossier: dict, report: dict, custom_id: str)
     if not db:
         return
     try:
-        # 1. Save main dossier to Supabase
+        # Pre-generate 3-language translations for instant web app tab switching
+        if isinstance(report, dict) and translator:
+            try:
+                user_report = report.get("user_facing_report", {})
+                summary = user_report.get("summary_paragraph", "")
+                actions = user_report.get("what_you_should_do", [])
+                key_findings = [f.get("claim", "") for f in report.get("verified_facts", []) if f.get("claim")]
+                red_flags = [f.get("flag", "") for f in report.get("red_flags", []) if f.get("flag")]
+
+                tr_res = translator.translate_report(
+                    summary=summary,
+                    key_findings=key_findings,
+                    red_flags=red_flags,
+                    recommended_actions=actions
+                )
+                if tr_res.get("status") == "success":
+                    payload["translations"] = tr_res.get("translations")
+            except Exception as tr_err:
+                print(f"[Background Pre-Translation Error]: {tr_err}")
+
+        # 1. Save main dossier to Supabase (includes 3-language translations)
         db.save_dossier(payload, custom_id=custom_id)
 
         # 2. Extract Gemini-verified evidence items
@@ -395,6 +415,54 @@ async def get_report(report_id: str):
     return {"status": "error", "message": "Report not found or expired"}
 
 
+import asyncio
+
+# In-Memory Message Buffering for Rapid Multi-Message Aggregation
+USER_MESSAGE_BUFFERS: Dict[str, List[Dict[str, Any]]] = {}
+USER_BUFFER_TASKS: Dict[str, asyncio.Task] = {}
+ACKNOWLEDGED_CHATS: set = set()
+
+
+async def _flush_buffer_and_process_v2(chat_id: str, session_id: str):
+    """
+    Timer Callback: Wait 5 seconds after the first message arrives.
+    Combines all texts, photos, and audio notes sent within those 5 seconds into ONE unified AI scan!
+    """
+    await asyncio.sleep(5.0)  # 5-second aggregation window
+
+    buffer_items = USER_MESSAGE_BUFFERS.pop(chat_id, [])
+    USER_BUFFER_TASKS.pop(chat_id, None)
+    ACKNOWLEDGED_CHATS.discard(chat_id)
+
+    if not buffer_items:
+        return
+
+    # Combine text snippets from all messages sent in the 5-second window
+    combined_texts = [item["text"].strip() for item in buffer_items if item.get("text") and item["text"].strip()]
+    full_text = "\n\n".join(combined_texts)
+
+    # Pick the primary media item (if any photo/audio was attached in the window)
+    primary_media_item = None
+    for item in buffer_items:
+        if item.get("has_media") or item.get("msg_type") in ["image", "audio", "ptt", "document"]:
+            primary_media_item = item
+            break
+
+    msg_type = primary_media_item["msg_type"] if primary_media_item else "chat"
+    has_media = primary_media_item["has_media"] if primary_media_item else False
+    message_id = primary_media_item["message_id"] if primary_media_item else None
+
+    # Execute full V2 pipeline worker with aggregated inputs
+    await _process_openwa_full_v2_and_reply(
+        chat_id=chat_id,
+        text=full_text,
+        msg_type=msg_type,
+        has_media=has_media,
+        message_id=message_id,
+        session_id=session_id
+    )
+
+
 async def _process_openwa_full_v2_and_reply(
     chat_id: str,
     text: str,
@@ -408,8 +476,8 @@ async def _process_openwa_full_v2_and_reply(
     1. Downloads image/audio binary from OpenWA if media is present.
     2. Runs ExtractorV2 (OCR + Audio Transcription + Regex).
     3. Runs OSINTCollectorV2 (Web Search + WHOIS + Supabase Database).
-    4. Runs JudgeV2 (Deterministic Scoring + Multi-model LLM Verdict).
-    5. Formats & sends the WhatsApp verdict report to the sender's phone number.
+    4. Runs JudgeV2 (Deterministic Scoring + Multi-model LLM Verdict in user's input language).
+    5. Saves dossier to Supabase and sends an emoji-free verdict report with full web report link.
     """
     openwa_base = os.getenv("OPENWA_GATEWAY_URL", "https://openwa-production-731b.up.railway.app").rstrip("/")
     api_key = os.getenv("OPENWA_API_KEY", "")
@@ -420,7 +488,6 @@ async def _process_openwa_full_v2_and_reply(
     media_bytes = None
     mime_type = None
 
-    # Fetch media bytes from OpenWA if message contains image or audio voice note
     if (has_media or msg_type in ["image", "audio", "ptt", "document"]) and message_id:
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
@@ -434,7 +501,7 @@ async def _process_openwa_full_v2_and_reply(
                 print(f"[OpenWA] Error fetching media for {message_id}: {e}")
 
     try:
-        # Phase 1: ExtractorV2 (OCR, Audio, Text)
+        # Phase 1: ExtractorV2
         extraction = ExtractorV2().extract_information(
             text=text, media_bytes=media_bytes, mime_type=mime_type
         )
@@ -449,44 +516,59 @@ async def _process_openwa_full_v2_and_reply(
 
         if not has_entities:
             reply_text = (
-                "ℹ️ *SCAMLESS ANALYSIS REPORT*\n\n"
+                "*SCAMLESS ANALYSIS REPORT*\n"
+                "----------------------------------------\n"
                 "No verifiable company names, website URLs, contact emails, or phone numbers were detected in your input.\n\n"
-                "💡 *Tip*: Send an offer letter, recruiter text, job flyer image, or audio note containing company contact details to perform a full OSINT investigation!"
+                "Tip: Send an offer letter, recruiter text, job flyer image, or audio note containing company contact details to perform a full OSINT investigation!"
             )
         else:
             # Phase 2: OSINTCollectorV2
             dossier = OSINTCollectorV2().collect_evidence(extraction)
-            # Phase 3: JudgeV2
+            # Phase 3: JudgeV2 (Outputs summary & actions in user's prompt language)
             report = JudgeV2().judge(dossier, original_message=text)
 
             exec_sum = report.get("executive_summary", {})
-            verdict = exec_sum.get("verdict", "inconclusive").lower()
+            verdict = exec_sum.get("verdict", "inconclusive").upper()
             conf = exec_sum.get("confidence_score", 50)
-            takeaway = exec_sum.get("one_sentence_takeaway", {}).get("user_language") or exec_sum.get("one_sentence_takeaway", {}).get("en") or ""
 
             user_report = report.get("user_facing_report", {})
-            title = user_report.get("title", "Forensic Investigation Report")
             summary = user_report.get("summary_paragraph", "")
             actions = user_report.get("what_you_should_do", [])
+            target_entity = master.get("organization_name") or "Unknown Entity"
 
-            verdict_emoji = "🚨" if verdict == "likely_scam" else ("⚠️" if verdict == "suspicious" else "✅")
-            verdict_title = "HIGH RISK SCAM" if verdict == "likely_scam" else ("SUSPICIOUS / UNVERIFIED" if verdict == "suspicious" else "LIKELY LEGITIMATE")
+            actions_str = "\n".join([f"- {a}" for a in actions[:3]]) if actions else "- Verify company credentials before making any payments."
 
-            actions_str = "\n".join([f"• {a}" for a in actions[:3]]) if actions else "• Verify company credentials before making any payments."
+            # Generate permanent dossier ID and save to Supabase DB for web link
+            dossier_id = f"rep_{secrets.token_hex(6)}"
+            report_link = f"https://naukrinigran.vercel.app/report/{dossier_id}"
+
+            response_payload = {
+                "status": "success",
+                "report": report,
+                "extracted_entities": master,
+                "dossier_id": dossier_id
+            }
+
+            if db:
+                try:
+                    _background_save(response_payload, dossier, report, dossier_id)
+                except Exception as db_err:
+                    print(f"[OpenWA] DB save error: {db_err}")
 
             reply_text = (
-                f"{verdict_emoji} *SCAMLESS FORENSIC REPORT*\n"
-                f"━━━━━━━━━━━━━━━━━━━━━\n"
-                f"*VERDICT*: {verdict_title}\n"
-                f"*TRUST SCORE*: {conf}/100\n\n"
-                f"*SUMMARY*:\n{summary if summary else takeaway}\n\n"
-                f"📋 *RECOMMENDED ACTIONS*:\n{actions_str}\n\n"
-                f"🛡️ *ScamLess AI Forensic Engine*"
+                f"*SCAMLESS FORENSIC REPORT*\n"
+                f"----------------------------------------\n"
+                f"*Target Entity*: {target_entity}\n"
+                f"*Verdict*: {verdict}\n"
+                f"*Trust Score*: {conf}/100\n\n"
+                f"*SUMMARY*:\n{summary}\n\n"
+                f"*RECOMMENDED ACTIONS*:\n{actions_str}\n\n"
+                f"*Full Detailed Report Link*:\n{report_link}"
             )
 
     except Exception as err:
         print(f"[OpenWA V2 Pipeline Error]: {err}")
-        reply_text = "⚠️ *Analysis Error*: Could not complete OSINT verification. Please try re-sending the message or flyer."
+        reply_text = "Analysis Error: Could not complete OSINT verification. Please try re-sending the message or flyer."
 
     # Post final report to OpenWA
     send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
@@ -507,7 +589,7 @@ async def _process_openwa_full_v2_and_reply(
 async def webhook(request: Request, background_tasks: BackgroundTasks):
     """
     Main Webhook endpoint supporting OpenWA (and fallback legacy integrations).
-    Handles text, images, and audio voice notes end-to-end.
+    Handles text, images, and audio voice notes end-to-end with 5-second aggregation buffer.
     """
     try:
         body = await request.json()
@@ -548,11 +630,11 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         # PRODUCTION TEST CHECK: If message is exactly "test-text", bypass AI pipeline completely
         if text.strip().lower() == "test-text":
             test_reply = (
-                f"🤖 *[ScamLess Production Test Check]*\n\n"
-                f"✅ Instant Recognition Successful!\n"
-                f"• *Sender*: `{chat_id}`\n"
-                f"• *Status*: OpenWA Webhook → Vercel Backend → WhatsApp Reply working 100%!\n\n"
-                f"⚡ *(AI Pipeline was bypassed for this test command)*"
+                f"*ScamLess Production Test Check*\n\n"
+                f"Instant Recognition Successful!\n"
+                f"- Sender: {chat_id}\n"
+                f"- Status: OpenWA Webhook -> Vercel Backend -> WhatsApp Reply working 100%!\n\n"
+                f"(AI Pipeline was bypassed for this test command)"
             )
             send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -568,35 +650,42 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
                     print("Error sending test-text reply:", str(e))
                     return {"status": "error", "message": str(e)}
 
-        # Send instant receipt acknowledgement to WhatsApp user
-        ack_text = (
-            "🔍 *ScamLess AI Analysis Initiated...*\n\n"
-            "We have received your WhatsApp input! Running OCR, transcribing media, and verifying company OSINT footprint. Please wait 15-30 seconds for your full forensic report."
-        )
+        # Buffer message for 5-second aggregation window
+        if chat_id not in USER_MESSAGE_BUFFERS:
+            USER_MESSAGE_BUFFERS[chat_id] = []
 
-        send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            try:
-                await client.post(
-                    send_url,
-                    json={"chatId": chat_id, "text": ack_text},
-                    headers=headers
-                )
-            except Exception as e:
-                print(f"[OpenWA] Error sending initial ack: {e}")
+        USER_MESSAGE_BUFFERS[chat_id].append({
+            "text": text,
+            "msg_type": msg_type,
+            "has_media": has_media,
+            "message_id": message_id
+        })
 
-        # Queue full async V2 analysis in background task (prevents webhook timeout)
-        background_tasks.add_task(
-            _process_openwa_full_v2_and_reply,
-            chat_id=chat_id,
-            text=text,
-            msg_type=msg_type,
-            has_media=has_media,
-            message_id=message_id,
-            session_id=session_id
-        )
+        # Send instant receipt acknowledgement to WhatsApp user ONCE per aggregation window (No Emojis)
+        if chat_id not in ACKNOWLEDGED_CHATS:
+            ACKNOWLEDGED_CHATS.add(chat_id)
+            ack_text = (
+                "*ScamLess AI Analysis Initiated...*\n\n"
+                "We have received your WhatsApp input. Running OCR, transcribing media, and verifying company OSINT footprint. Please wait 15-30 seconds for your full forensic report."
+            )
+            send_url = f"{openwa_base}/api/sessions/{session_id}/messages/send-text"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                try:
+                    await client.post(
+                        send_url,
+                        json={"chatId": chat_id, "text": ack_text},
+                        headers=headers
+                    )
+                except Exception as e:
+                    print(f"[OpenWA] Error sending initial ack: {e}")
 
-        return {"status": "success", "session": session_id, "chatId": chat_id}
+        # Start 5-second timer task if not already running for this user
+        if chat_id not in USER_BUFFER_TASKS:
+            USER_BUFFER_TASKS[chat_id] = asyncio.create_task(
+                _flush_buffer_and_process_v2(chat_id, session_id)
+            )
+
+        return {"status": "buffered", "session": session_id, "chatId": chat_id}
 
     # Legacy WireWeb fallback path
     user_id = body.get("sender") or body.get("chat") or "unknown_user"

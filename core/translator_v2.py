@@ -19,6 +19,7 @@ class LangTranslation(BaseModel):
 
 
 class TranslationResponseSchema(BaseModel):
+    en: LangTranslation
     ur: LangTranslation
     roman_ur: LangTranslation
 
@@ -26,7 +27,7 @@ class TranslationResponseSchema(BaseModel):
 class ReportTranslatorV2:
     """
     On-Demand & Background Pre-translation Engine for ScamLess Investigation Dossiers.
-    Translates English scan reports into Urdu Script (`ur`) and Roman Urdu (`roman_ur`)
+    Translates scan reports into English (`en`), Urdu Script (`ur`), and Roman Urdu (`roman_ur`)
     simultaneously using the same model engine as JudgeV2.
     """
 
@@ -58,7 +59,7 @@ class ReportTranslatorV2:
     ) -> Dict[str, Any]:
         """
         Translates report summary, key findings, red flags, and recommended actions
-        into Urdu Script (ur) and Roman Urdu (roman_ur). Accepts either explicit arguments
+        into English (en), Urdu Script (ur), and Roman Urdu (roman_ur). Accepts either explicit arguments
         or a payload dictionary.
         """
         if not self.clients:
@@ -75,19 +76,21 @@ class ReportTranslatorV2:
         red_flags = red_flags or []
         recommended_actions = recommended_actions or []
 
-        prompt = f"""You are an expert Urdu and Roman Urdu translator specializing in cybersecurity and job-scam detection for Pakistani users.
-Translate the following English scam report elements into TWO formats:
-1) `ur`: Authentic Urdu script (اردو رسم الخط using standard vocabulary).
-2) `roman_ur`: Natural Roman Urdu (Latin alphabet, e.g., "Yeh job offer aik fake fee trap scam hai...").
+        prompt = f"""You are an expert multilingual translator specializing in cybersecurity and job-scam detection for Pakistani users.
+Translate the provided scam report elements into THREE clean formats regardless of the input language:
+1) `en`: Professional English.
+2) `ur`: Authentic Urdu script (اردو رسم الخط using standard vocabulary).
+3) `roman_ur`: Natural Roman Urdu (Latin alphabet, e.g., "Yeh job offer aik fake fee trap scam hai...").
 
-ENGLISH INPUT DETAILS:
+INPUT REPORT DETAILS:
 Summary: {summary}
 Key Findings: {json.dumps(key_findings, ensure_ascii=False)}
 Red Flags: {json.dumps(red_flags, ensure_ascii=False)}
 Recommended Actions: {json.dumps(recommended_actions, ensure_ascii=False)}
 
 CRITICAL CONSTRAINTS:
-- `ur.key_findings`, `ur.red_flags`, `ur.recommended_actions` MUST have the EXACT SAME array length as input arrays ({len(key_findings)}, {len(red_flags)}, {len(recommended_actions)} items respectively).
+- `en.key_findings`, `en.red_flags`, `en.recommended_actions` MUST have the EXACT SAME array length as input arrays ({len(key_findings)}, {len(red_flags)}, {len(recommended_actions)} items respectively).
+- `ur.key_findings`, `ur.red_flags`, `ur.recommended_actions` MUST have the EXACT SAME array length as input arrays.
 - `roman_ur.key_findings`, `roman_ur.red_flags`, `roman_ur.recommended_actions` MUST have the EXACT SAME array length as input arrays.
 - Tone must be clear, urgent, and professional.
 """
