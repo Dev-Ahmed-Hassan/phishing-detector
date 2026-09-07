@@ -1,6 +1,7 @@
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, Request, File, UploadFile, Form, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
+import base64
 import httpx
 import json
 import os
@@ -474,11 +475,13 @@ async def _process_openwa_full_v2_and_reply(
     has_media: bool,
     message_id: Optional[str],
     session_id: str,
-    received_at: str = ""
+    received_at: str = "",
+    media_bytes: Optional[bytes] = None,
+    mime_type: Optional[str] = None
 ):
     """
     Asynchronous Full V2 Pipeline Worker:
-    1. Downloads image/audio binary from OpenWA if media is present.
+    1. Receives inline image/audio binary or downloads from OpenWA.
     2. Runs ExtractorV2 (OCR + Audio Transcription + Regex).
     3. Runs OSINTCollectorV2 (Web Search + WHOIS + Supabase Database).
     4. Runs JudgeV2 (Deterministic Scoring + Multi-model LLM Verdict in user's input language).
@@ -502,19 +505,16 @@ async def _process_openwa_full_v2_and_reply(
     if api_key:
         headers["X-API-Key"] = api_key
 
-    media_bytes = None
-    mime_type = None
-
-    # Only attempt media download if actual media attachment is present
-    if has_media and msg_type in ["image", "audio", "ptt", "document"] and message_id:
+    # Fallback: Download media via GET if media_bytes were not sent inline
+    if not media_bytes and (has_media or msg_type in ["image", "photo", "audio", "ptt", "document"]) and message_id:
         async with httpx.AsyncClient(timeout=15.0) as client:
             try:
                 media_url = f"{openwa_base}/api/sessions/{session_id}/messages/{message_id}/media"
                 resp = await client.get(media_url, headers=headers)
                 if resp.status_code == 200:
                     media_bytes = resp.content
-                    mime_type = resp.headers.get("content-type", "image/jpeg" if msg_type == "image" else "audio/ogg")
-                    print(f"[OpenWA] Downloaded media bytes ({len(media_bytes)} bytes, mime={mime_type})")
+                    mime_type = resp.headers.get("content-type", mime_type or ("image/jpeg" if msg_type == "image" else "audio/ogg"))
+                    print(f"[OpenWA] Downloaded media bytes via GET ({len(media_bytes)} bytes)")
             except Exception as e:
                 print(f"[OpenWA] Error fetching media for {message_id}: {e}")
 
@@ -532,10 +532,14 @@ async def _process_openwa_full_v2_and_reply(
             master.get("unique_verifiable_claims")
         ])
 
-        # If user typed a company name query (e.g., "Ubexi"), use text input as target organization
-        if not has_entities and text and len(text.strip()) >= 3:
-            master["organization_name"] = text.strip()
-            has_entities = True
+        # If user sent an image or typed a query, enable full pipeline analysis
+        if not has_entities:
+            if media_bytes:
+                master["organization_name"] = "Visual Job Flyer / Image Evidence"
+                has_entities = True
+            elif text and len(text.strip()) >= 3:
+                master["organization_name"] = text.strip()
+                has_entities = True
 
         if not has_entities:
             reply_text = (
@@ -648,11 +652,35 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         if not chat_id:
             return {"status": "ignored", "reason": "No sender chatId found"}
 
-        text = msg_data.get("body", "")
+        text = msg_data.get("caption") or msg_data.get("body", "")
         msg_type = msg_data.get("type", "chat")
-        has_media = msg_data.get("hasMedia", False)
-        message_id = msg_data.get("id") or msg_data.get("_serialized")
+        has_media = bool(msg_data.get("hasMedia") or msg_data.get("isMedia") or msg_type in ["image", "photo", "audio", "ptt", "document"])
+
+        raw_id = msg_data.get("id")
+        if isinstance(raw_id, dict):
+            message_id = raw_id.get("id") or raw_id.get("_serialized")
+        elif isinstance(raw_id, str):
+            message_id = raw_id
+        else:
+            message_id = msg_data.get("_serialized")
+
         session_id = body.get("sessionId") or os.getenv("OPENWA_SESSION_ID", "default")
+
+        # Extract & decode inline base64 media if provided directly in OpenWA payload
+        media_bytes = None
+        mime_type = None
+        media_obj = msg_data.get("media") if isinstance(msg_data.get("media"), dict) else {}
+        media_b64 = media_obj.get("data") or msg_data.get("base64") or msg_data.get("mediaData", {}).get("data")
+        mime_type = media_obj.get("mimetype") or msg_data.get("mimetype") or ("image/jpeg" if msg_type in ["image", "photo"] else "audio/ogg")
+
+        if media_b64 and isinstance(media_b64, str):
+            try:
+                if "," in media_b64:
+                    media_b64 = media_b64.split(",", 1)[1]
+                media_bytes = base64.b64decode(media_b64)
+                print(f"[OpenWA Webhook] Successfully decoded inline media ({len(media_bytes)} bytes, mime={mime_type})")
+            except Exception as b64_err:
+                print(f"[OpenWA Webhook] Base64 decoding failed: {b64_err}")
 
         openwa_base = os.getenv("OPENWA_GATEWAY_URL", "https://openwa-production-731b.up.railway.app").rstrip("/")
         api_key = os.getenv("OPENWA_API_KEY", "")
@@ -694,18 +722,6 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
         else:
             rec_time_str = time.strftime("%H:%M:%S")
 
-        # Buffer message for 5-second aggregation window
-        if chat_id not in USER_MESSAGE_BUFFERS:
-            USER_MESSAGE_BUFFERS[chat_id] = []
-
-        USER_MESSAGE_BUFFERS[chat_id].append({
-            "text": text,
-            "msg_type": msg_type,
-            "has_media": has_media,
-            "message_id": message_id,
-            "timestamp": rec_time_str
-        })
-
         # Send instant receipt acknowledgement to WhatsApp user (No Emojis)
         ack_text = (
             "*ScamLess AI Analysis Initiated...*\n\n"
@@ -731,7 +747,9 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
             has_media=has_media,
             message_id=message_id,
             session_id=session_id,
-            received_at=rec_time_str
+            received_at=rec_time_str,
+            media_bytes=media_bytes,
+            mime_type=mime_type
         )
 
         return {"status": "queued", "session": session_id, "chatId": chat_id}
