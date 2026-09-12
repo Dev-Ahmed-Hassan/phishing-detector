@@ -164,13 +164,6 @@ async def openwa_test_webhook(request: Request):
             print("Error calling OpenWA send-text:", str(e))
             return {"status": "error", "message": str(e)}
 
-
-@app.post("/api/translate-report")
-async def translate_report_endpoint(payload: dict):
-    if not translator:
-        return {"status": "error", "message": "Translator uninitialized"}
-    return translator.translate_report(payload)
-
 @app.post("/api/analyze-web")
 async def analyze_web(
     text: str = Form(default=""),
@@ -324,8 +317,8 @@ async def translate_report_endpoint(payload: dict):
     if not summary and not key_findings and not red_flags:
         return {"status": "error", "message": "Nothing to translate"}
 
-    translator = ReportTranslatorV2()
-    result = translator.translate_report(
+    tr_instance = translator if translator else ReportTranslatorV2()
+    result = tr_instance.translate_report(
         summary=summary,
         key_findings=key_findings,
         red_flags=red_flags,

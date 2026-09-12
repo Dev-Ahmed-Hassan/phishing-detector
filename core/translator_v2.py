@@ -77,10 +77,11 @@ class ReportTranslatorV2:
         recommended_actions = recommended_actions or []
 
         prompt = f"""You are an expert multilingual translator specializing in cybersecurity and job-scam detection for Pakistani users.
-Translate the provided scam report elements into THREE clean formats regardless of the input language:
-1) `en`: Professional English.
-2) `ur`: Authentic Urdu script (اردو رسم الخط using standard vocabulary).
-3) `roman_ur`: Natural Roman Urdu (Latin alphabet, e.g., "Yeh job offer aik fake fee trap scam hai...").
+Translate the provided scam report elements into THREE STRICTLY SEPARATE, UNMIXED LANGUAGE FORMATS regardless of the input language:
+
+1) `en`: STRICTLY 100% Professional English only. Do NOT include Urdu script or Roman Urdu words inside `en` fields.
+2) `ur`: STRICTLY 100% Authentic Urdu script (اردو رسم الخط) only. Use proper Nastaliq/standard Urdu script for all strings inside `ur` fields. Do NOT write in Latin/English alphabet inside `ur`.
+3) `roman_ur`: STRICTLY 100% Natural Roman Urdu (Urdu spoken phonetically in the Latin alphabet, e.g., "Yeh job offer aik fake fee trap scam hai..."). Do NOT use Urdu script (اردو) or plain standard English inside `roman_ur` fields.
 
 INPUT REPORT DETAILS:
 Summary: {summary}
@@ -89,6 +90,7 @@ Red Flags: {json.dumps(red_flags, ensure_ascii=False)}
 Recommended Actions: {json.dumps(recommended_actions, ensure_ascii=False)}
 
 CRITICAL CONSTRAINTS:
+- ABSOLUTELY ZERO LANGUAGE CROSS-CONTAMINATION: Each language section (`en`, `ur`, `roman_ur`) must strictly contain ONLY its designated language script and format.
 - `en.key_findings`, `en.red_flags`, `en.recommended_actions` MUST have the EXACT SAME array length as input arrays ({len(key_findings)}, {len(red_flags)}, {len(recommended_actions)} items respectively).
 - `ur.key_findings`, `ur.red_flags`, `ur.recommended_actions` MUST have the EXACT SAME array length as input arrays.
 - `roman_ur.key_findings`, `roman_ur.red_flags`, `roman_ur.recommended_actions` MUST have the EXACT SAME array length as input arrays.
