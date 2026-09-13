@@ -45,7 +45,11 @@ app.add_middleware(
 WIREWEB_API_KEY = os.getenv("WIREWEB_API_KEY")
 WIREWEB_SESSION_ID = os.getenv("WIREWEB_SESSION_ID")
 
-ADMIN_SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "naukri_nigran_admin_2026")
+def get_admin_secret_key() -> str:
+    key = os.getenv("ADMIN_SECRET_KEY")
+    if key:
+        return key.strip()
+    return os.getenv("ADMIN_KEY", "scamless_admin_2026").strip()
 
 # Initialize our modular pipeline and DB
 db = Database()
@@ -68,8 +72,9 @@ async def submit_community_report(payload: dict):
 
 
 @app.get("/api/admin/pending-reports")
-async def get_pending_reports(admin_key: str):
-    if admin_key != ADMIN_SECRET_KEY:
+async def get_pending_reports(admin_key: str = ""):
+    expected_key = get_admin_secret_key()
+    if (admin_key or "").strip() != expected_key:
         return {"status": "error", "message": "Unauthorized Admin Key"}
     if not db:
         return []
@@ -78,11 +83,12 @@ async def get_pending_reports(admin_key: str):
 
 @app.post("/api/admin/verify-report")
 async def verify_report(payload: dict):
-    admin_key = payload.get("admin_key")
+    admin_key = payload.get("admin_key", "")
     report_id = payload.get("report_id")
     action = payload.get("action", "approve")
 
-    if admin_key != ADMIN_SECRET_KEY:
+    expected_key = get_admin_secret_key()
+    if (admin_key or "").strip() != expected_key:
         return {"status": "error", "message": "Unauthorized Admin Key"}
     if not db or not report_id:
         return {"status": "error", "message": "Invalid report ID"}
