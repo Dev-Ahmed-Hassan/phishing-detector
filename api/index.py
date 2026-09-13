@@ -46,10 +46,10 @@ WIREWEB_API_KEY = os.getenv("WIREWEB_API_KEY")
 WIREWEB_SESSION_ID = os.getenv("WIREWEB_SESSION_ID")
 
 def get_admin_secret_key() -> str:
-    key = os.getenv("ADMIN_SECRET_KEY")
+    key = os.getenv("ADMIN_SECRET_KEY") or os.getenv("ADMIN_KEY")
     if key:
         return key.strip()
-    return os.getenv("ADMIN_KEY", "scamless_admin_2026").strip()
+    return ""
 
 # Initialize our modular pipeline and DB
 db = Database()
@@ -74,6 +74,8 @@ async def submit_community_report(payload: dict):
 @app.get("/api/admin/pending-reports")
 async def get_pending_reports(admin_key: str = ""):
     expected_key = get_admin_secret_key()
+    if not expected_key:
+        return {"status": "error", "message": "ADMIN_SECRET_KEY environment variable is missing on backend deployment."}
     if (admin_key or "").strip() != expected_key:
         return {"status": "error", "message": "Unauthorized Admin Key"}
     if not db:
@@ -88,6 +90,8 @@ async def verify_report(payload: dict):
     action = payload.get("action", "approve")
 
     expected_key = get_admin_secret_key()
+    if not expected_key:
+        return {"status": "error", "message": "ADMIN_SECRET_KEY environment variable is missing on backend deployment."}
     if (admin_key or "").strip() != expected_key:
         return {"status": "error", "message": "Unauthorized Admin Key"}
     if not db or not report_id:
