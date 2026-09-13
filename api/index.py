@@ -29,16 +29,12 @@ app.add_middleware(
         "https://scamless.vercel.app",
         "https://scamless-ai.vercel.app",
         "https://scamless-web.vercel.app",
-        "https://naukrinigran.vercel.app",
-        "https://naukrinigran-git-public-report-feat-ahmed--hassan.vercel.app",
-        "https://naukrinigran-git-test-db-feat-ahmed--hassan.vercel.app",
-        "https://naukrinigran-7xauq1d97-ahmed-hassan.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "*"
     ],
+    allow_origin_regex=r"^(chrome-extension|moz-extension|extension)://.*$",
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
