@@ -75,8 +75,10 @@ async def submit_community_report(payload: dict):
 async def get_pending_reports(admin_key: str = ""):
     expected_key = get_admin_secret_key()
     if not expected_key:
-        return {"status": "error", "message": "ADMIN_SECRET_KEY environment variable is missing on backend deployment."}
+        print("[ADMIN AUTH ERROR] ADMIN_SECRET_KEY environment variable is missing on backend deployment.")
+        return {"status": "error", "message": "Unauthorized Admin Key"}
     if (admin_key or "").strip() != expected_key:
+        print("[ADMIN AUTH ERROR] Given admin_key does not match expected ADMIN_SECRET_KEY.")
         return {"status": "error", "message": "Unauthorized Admin Key"}
     if not db:
         return []
@@ -91,8 +93,10 @@ async def verify_report(payload: dict):
 
     expected_key = get_admin_secret_key()
     if not expected_key:
-        return {"status": "error", "message": "ADMIN_SECRET_KEY environment variable is missing on backend deployment."}
+        print("[ADMIN AUTH ERROR] ADMIN_SECRET_KEY environment variable is missing on backend deployment.")
+        return {"status": "error", "message": "Unauthorized Admin Key"}
     if (admin_key or "").strip() != expected_key:
+        print("[ADMIN AUTH ERROR] Given admin_key does not match expected ADMIN_SECRET_KEY.")
         return {"status": "error", "message": "Unauthorized Admin Key"}
     if not db or not report_id:
         return {"status": "error", "message": "Invalid report ID"}
